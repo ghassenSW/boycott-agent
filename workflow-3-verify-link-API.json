@@ -1,0 +1,534 @@
+{
+  "name": "Link Verifier — API (POST /verify-link)",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "verify-link",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "id": "v-webhook",
+      "name": "Webhook (POST /verify-link)",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [
+        -1120,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "const body = $input.first().json.body || $input.first().json;\n\nconst url = (body.url || '').toString().trim();\nconst product = (body.product || '').toString().trim();\nconst cause = (body.cause || '').toString().trim();\n\nif (!url) throw new Error('Missing \"url\".');\nif (!product) throw new Error('Missing \"product\".');\nif (!cause) throw new Error('Missing \"cause\".');\n\n// URL sanity check.\n// NOTE: n8n's Code-node sandbox does NOT expose the `URL` global, so parse manually.\nconst m = url.match(/^([a-z][a-z0-9+.\\-]*):\\/\\/([^\\/?#\\s]+)([^\\s]*)$/i);\nif (!m) {\n  throw new Error('\"url\" does not look like a valid URL (expected http://... or https://...): ' + url);\n}\nconst protocol = m[1].toLowerCase();\nif (protocol !== 'http' && protocol !== 'https') {\n  throw new Error('Only http/https URLs are supported. Got: ' + protocol);\n}\n// strip any user:pass@ and :port to get the bare host\nconst hostname = m[2].split('@').pop().split(':')[0].toLowerCase();\n\nconst url_normalized = url.toLowerCase().replace(/\\/+$/, '');\nconst product_normalized = product.toLowerCase().replace(/\\s+/g, ' ');\nconst cause_normalized = cause.toLowerCase().replace(/\\s+/g, ' ');\nconst cache_key = `${url_normalized.slice(0, 500)}|${product_normalized}|${cause_normalized}`;\n\nreturn [{ json: { url, product, cause, hostname, protocol, url_normalized, product_normalized, cause_normalized, cache_key } }];"
+      },
+      "id": "v-normalize",
+      "name": "Normalize Input",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -680,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT * FROM link_verifications WHERE cache_key = $1 LIMIT 1;",
+        "options": {
+          "queryReplacement": "={{ $json.cache_key }}"
+        }
+      },
+      "id": "v-cache-lookup",
+      "name": "Cache Lookup",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [
+        -460,
+        300
+      ],
+      "alwaysOutputData": true,
+      "notes": "Select your Postgres credential here (same one as the other workflows)."
+    },
+    {
+      "parameters": {
+        "jsCode": "const norm = $('Normalize Input').first().json;\nconst rows = $input.all();\nconst row = (rows.length && rows[0].json && rows[0].json.cache_key) ? rows[0].json : null;\n\n// A page's content rarely changes, so verifications stay valid longer than boycott status.\nconst FRESH_DAYS = 30;\nlet fresh = false;\nif (row && row.checked_at) {\n  const ageDays = (Date.now() - new Date(row.checked_at).getTime()) / 86400000;\n  fresh = ageDays <= FRESH_DAYS;\n}\nreturn [{ json: { ...norm, cacheHit: !!row, fresh, cachedRow: row } }];"
+      },
+      "id": "v-eval-cache",
+      "name": "Evaluate Cache",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -240,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "typeValidation": "strict",
+            "version": 2
+          },
+          "combinator": "and",
+          "conditions": [
+            {
+              "id": "v-cond-fresh",
+              "leftValue": "={{ $json.fresh }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "v-if-fresh",
+      "name": "Fresh Cache?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        -20,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "const c = $json.cachedRow || {};\nreturn [{ json: { ...c, served_from: 'cache' } }];"
+      },
+      "id": "v-cached-result",
+      "name": "Cached Result",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        200,
+        140
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.tavily.com/extract",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Authorization",
+              "value": "=Bearer {{ $env.TAVILY_API_KEY }}"
+            },
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ urls: [$json.url], extract_depth: 'advanced' }) }}",
+        "options": {
+          "timeout": 60000
+        }
+      },
+      "id": "v-tavily-extract",
+      "name": "Tavily Extract",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        200,
+        420
+      ],
+      "alwaysOutputData": true,
+      "onError": "continueRegularOutput",
+      "notes": "Fetches the readable text of the URL. Errors are passed through on purpose so a dead link becomes 'unreachable' instead of crashing the run."
+    },
+    {
+      "parameters": {
+        "jsCode": "// Decide whether the link is genuinely usable, and score the DETERMINISTIC part of credibility.\nconst ctx = $('Evaluate Cache').first().json;\nconst resp = $input.first().json || {};\n\n// --- pull content out of Tavily's response (defensively) ---\nlet content = '';\nlet failed = false;\nlet note = '';\n\nif (resp.error) {\n  failed = true;\n  note = typeof resp.error === 'string' ? resp.error : JSON.stringify(resp.error);\n}\nif (Array.isArray(resp.results) && resp.results.length) {\n  const r = resp.results[0];\n  content = r.raw_content || r.rawContent || r.content || '';\n}\nif (Array.isArray(resp.failed_results) && resp.failed_results.length) {\n  failed = true;\n  note = resp.failed_results[0].error || 'extraction failed';\n}\n\ncontent = (content || '').toString().trim();\nconst content_length = content.length;\n\n// A page that returns almost nothing (paywall, JS-only, 404 page) is not verifiable.\nconst available = !failed && content_length >= 200;\nif (!available && !note) {\n  note = content_length > 0\n    ? `page returned only ${content_length} characters (paywall, JS-only page, or empty)`\n    : 'no readable content returned';\n}\n\n// --- domain + metadata signals (deterministic credibility base) ---\n// hostname/protocol were parsed once in Normalize Input (no `URL` global in this sandbox)\nconst domain = (ctx.hostname || '').replace(/^www\\./, '').toLowerCase();\nconst isHttps = ctx.protocol === 'https';\n\nconst MAJOR_NEWS = ['reuters.com','apnews.com','bbc.com','bbc.co.uk','aljazeera.com','theguardian.com','nytimes.com','washingtonpost.com','ft.com','bloomberg.com','cnn.com','npr.org','economist.com','wsj.com','lemonde.fr','dw.com','france24.com','abcnews.go.com','cbsnews.com','nbcnews.com','independent.co.uk','telegraph.co.uk','haaretz.com','middleeasteye.net','thenational.ae','timesofindia.indiatimes.com','scmp.com'];\nconst NGO_WATCHDOG = ['hrw.org','amnesty.org','transparency.org','oxfam.org','greenpeace.org','globalwitness.org','cleanclothes.org','business-humanrights.org','somo.nl'];\nconst ADVOCACY     = ['bdsmovement.net','ethicalconsumer.org','boycott.thewitness.org','sumofus.org'];\nconst REFERENCE    = ['wikipedia.org','britannica.com'];\nconst BLOG_HOSTS   = ['medium.com','substack.com','blogspot.com','wordpress.com','tumblr.com','blogger.com'];\nconst SOCIAL       = ['x.com','twitter.com','facebook.com','reddit.com','tiktok.com','instagram.com','youtube.com','threads.net','t.me','linkedin.com'];\n\nconst hits = (list) => list.some(d => domain === d || domain.endsWith('.' + d));\nconst isOfficialTld = /\\.(gov|edu|int)$/.test(domain) || /\\.gov\\.[a-z]{2}$/.test(domain) || /\\.ac\\.[a-z]{2}$/.test(domain) || ['un.org','who.int','europa.eu','ilo.org'].some(d => domain === d || domain.endsWith('.' + d));\n\nlet domain_tier, domain_score;\nif (isOfficialTld)          { domain_tier = 'official';   domain_score = 40; }\nelse if (hits(MAJOR_NEWS))  { domain_tier = 'major_news'; domain_score = 40; }\nelse if (hits(NGO_WATCHDOG)){ domain_tier = 'ngo';        domain_score = 35; }\nelse if (hits(ADVOCACY))    { domain_tier = 'advocacy';   domain_score = 28; }\nelse if (hits(REFERENCE))   { domain_tier = 'reference';  domain_score = 25; }\nelse if (hits(BLOG_HOSTS))  { domain_tier = 'blog';       domain_score = 12; }\nelse if (hits(SOCIAL))      { domain_tier = 'social';     domain_score = 8;  }\nelse                        { domain_tier = 'unknown';    domain_score = 20; }\n\n// heuristic metadata detection on the extracted text\nconst head = content.slice(0, 3000);\nconst has_author = /\\b(by|By|BY)\\s+[A-Z][a-z]+\\s+[A-Z][a-z']+/.test(head) || /author/i.test(head);\nconst has_date = /\\b(20\\d{2}-\\d{2}-\\d{2})\\b/.test(head) ||\n  /\\b(January|February|March|April|May|June|July|August|September|October|November|December)\\s+\\d{1,2},?\\s+20\\d{2}\\b/i.test(head) ||\n  /\\b\\d{1,2}\\s+(January|February|March|April|May|June|July|August|September|October|November|December)\\s+20\\d{2}\\b/i.test(head);\n\nlet credibility_base = domain_score;\nif (has_author) credibility_base += 8;\nif (has_date) credibility_base += 8;\nif (isHttps) credibility_base += 4;\nif (content_length >= 1200) credibility_base += 10;\ncredibility_base = Math.max(0, Math.min(70, credibility_base)); // base caps at 70; LLM can add up to +15\n\nreturn [{ json: {\n  ...ctx,\n  available,\n  availability_note: available ? '' : note,\n  content,\n  content_length,\n  domain,\n  signals: { domain_tier, domain_score, has_author, has_date, isHttps, content_length },\n  credibility_base\n} }];"
+      },
+      "id": "v-check-avail",
+      "name": "Check Availability",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        420,
+        420
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "typeValidation": "strict",
+            "version": 2
+          },
+          "combinator": "and",
+          "conditions": [
+            {
+              "id": "v-cond-avail",
+              "leftValue": "={{ $json.available }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "v-if-avail",
+      "name": "Link Available?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        640,
+        420
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Dead / paywalled / empty link — short-circuit with an honest 'unreachable' verdict.\nconst c = $json;\nreturn [{ json: {\n  url: c.url,\n  product: c.product,\n  cause: c.cause,\n  cache_key: c.cache_key,\n  available: false,\n  availability_note: c.availability_note,\n  domain: c.domain,\n  content_length: c.content_length || 0,\n  verdict: 'unreachable',\n  support_strength: 0,\n  credibility: 0,\n  credibility_base: c.credibility_base || 0,\n  credibility_adjust: 0,\n  credibility_reason: 'Not assessed — page content could not be read.',\n  mentions_product: false,\n  mentions_cause: false,\n  content_type: 'unknown',\n  summary: '',\n  evidence: [],\n  evidence_dropped: 0,\n  notes: `The link could not be verified: ${c.availability_note}. This says nothing about whether the claim is true — only that THIS link cannot support it.`,\n  checked_at: new Date().toISOString(),\n  served_from: 'live'\n} }];"
+      },
+      "id": "v-unavailable",
+      "name": "Unavailable Result",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        860,
+        620
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Ground the model strictly on THIS page's text.\nconst ctx = $('Check Availability').first().json;\nconst pageText = (ctx.content || '').slice(0, 12000); // keep the prompt within free-tier limits\n\nconst system = [\n  'You are a strict source-verification analyst.',\n  'You are given the text of ONE web page, a product/brand, and a claimed cause for boycotting it.',\n  'Judge ONLY from the page text provided. Never use prior knowledge about the brand.',\n  'Never invent quotes: every evidence quote must appear VERBATIM in the page text, under 25 words each, maximum 3 quotes.',\n  'Be strict. A page that merely mentions the brand, or that discusses a DIFFERENT cause, does NOT support the claim.',\n  'Stay neutral: report what the page says, do not take a side on the boycott itself.',\n  'Respond with ONLY a JSON object and no other text.'\n].join(' ');\n\nconst user = [\n  `Product/Brand: ${ctx.product}`,\n  `Claimed cause for boycott: ${ctx.cause}`,\n  `Page URL: ${ctx.url}`,\n  '',\n  'PAGE TEXT:',\n  '\"\"\"',\n  pageText,\n  '\"\"\"',\n  '',\n  'Return a JSON object with exactly these fields:',\n  '{',\n  '  \"mentions_product\": true or false,',\n  '  \"mentions_cause\": true or false,',\n  '  \"support\": \"supports\" | \"partial\" | \"unrelated\" | \"contradicts\",',\n  '  \"content_type\": \"news_report\" | \"opinion\" | \"activist_campaign\" | \"social_post\" | \"corporate_statement\" | \"reference\" | \"other\",',\n  '  \"evidence\": [\"short verbatim quote from the page, under 25 words\"],',\n  '  \"summary\": \"one neutral sentence on what this page says about the product and the cause\",',\n  '  \"credibility_adjustment\": integer from -15 to 15,',\n  '  \"credibility_reason\": \"short reason for the adjustment\"',\n  '}',\n  '',\n  'Definitions:',\n  '- \"supports\": the page clearly links THIS product to THIS cause in a boycott or criticism context.',\n  '- \"partial\": the link is weak, indirect, or only one of the two is discussed strongly.',\n  '- \"unrelated\": the page does not connect this product to this cause.',\n  '- \"contradicts\": the page argues against or debunks the claim.',\n  '',\n  'credibility_adjustment guidance: reward primary sources, named reporting, cited evidence and balance;',\n  'penalise sensationalism, anonymous claims, pure opinion presented as fact, and obvious promotional intent.'\n].join('\\n');\n\nconst payload = {\n  model: $env.LLM_MODEL || 'gemini-3-flash-preview',\n  temperature: 0,\n  response_format: { type: 'json_object' },\n  messages: [\n    { role: 'system', content: system },\n    { role: 'user', content: user }\n  ]\n};\n\nreturn [{ json: { ...ctx, llmPayload: payload } }];"
+      },
+      "id": "v-build-context",
+      "name": "Build LLM Context",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        860,
+        340
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $env.LLM_BASE_URL }}/chat/completions",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Authorization",
+              "value": "=Bearer {{ $env.LLM_API_KEY }}"
+            },
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify($json.llmPayload) }}",
+        "options": {
+          "timeout": 120000
+        }
+      },
+      "id": "v-llm",
+      "name": "LLM Verifier",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1080,
+        340
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Parse the model's JSON, VALIDATE its quotes against the real page, then score deterministically.\nconst ctx = $('Build LLM Context').first().json;\nconst resp = $input.first().json;\n\nlet content = (resp.choices && resp.choices[0] && resp.choices[0].message && resp.choices[0].message.content) || '{}';\nlet parsed;\ntry {\n  parsed = JSON.parse(content);\n} catch (e) {\n  // some models wrap JSON in prose or fences — try to salvage the object\n  const m = String(content).match(/\\{[\\s\\S]*\\}/);\n  try { parsed = JSON.parse(m ? m[0] : '{}'); } catch (e2) { parsed = {}; }\n}\n\nconst support = ['supports','partial','unrelated','contradicts'].includes(parsed.support) ? parsed.support : 'unrelated';\nconst mentions_product = parsed.mentions_product === true;\nconst mentions_cause = parsed.mentions_cause === true;\n\n// --- anti-hallucination: keep only quotes that actually appear in the page ---\nconst pageLower = (ctx.content || '').toLowerCase().replace(/\\s+/g, ' ');\nconst rawEvidence = Array.isArray(parsed.evidence) ? parsed.evidence : [];\nconst evidence = rawEvidence\n  .filter(q => typeof q === 'string' && q.trim().length > 10)\n  .map(q => q.trim())\n  .filter(q => {\n    const probe = q.toLowerCase().replace(/\\s+/g, ' ').slice(0, 60);\n    return pageLower.includes(probe);\n  })\n  .slice(0, 3);\nconst evidence_dropped = rawEvidence.length - evidence.length;\n\n// --- support strength (deterministic) ---\nlet support_strength;\nif (support === 'supports')         support_strength = 80 + evidence.length * 5;\nelse if (support === 'partial')     support_strength = 45 + evidence.length * 3;\nelse if (support === 'contradicts') support_strength = 0;\nelse                                support_strength = 5;\n\nif (!mentions_product)      support_strength = Math.min(support_strength, 10);\nelse if (!mentions_cause)   support_strength = Math.min(support_strength, 35);\nif (support === 'supports' && evidence.length === 0) support_strength = Math.min(support_strength, 60); // claimed support but no verifiable quote\nsupport_strength = Math.max(0, Math.min(100, Math.round(support_strength)));\n\n// --- credibility: deterministic base + bounded LLM adjustment ---\nlet adjust = Number(parsed.credibility_adjustment);\nif (!Number.isFinite(adjust)) adjust = 0;\nadjust = Math.max(-15, Math.min(15, Math.round(adjust)));\nconst credibility = Math.max(0, Math.min(100, (ctx.credibility_base || 0) + adjust));\n\n// --- overall verdict ---\nlet verdict;\nif (support === 'contradicts')      verdict = 'contradicts_claim';\nelse if (!mentions_product)         verdict = 'unrelated';\nelse if (support_strength >= 70)    verdict = 'verified';\nelse if (support_strength >= 40)    verdict = 'weak_support';\nelse                                verdict = 'unrelated';\n\nconst s = ctx.signals || {};\nconst notes = [\n  `Support strength ${support_strength}/100 = how strongly THIS page backs \"${ctx.product}\" + \"${ctx.cause}\" (from the model's classification, capped by whether the product and cause are actually discussed, and by how many quotes were verifiable).`,\n  `Credibility ${credibility}/100 = deterministic base ${ctx.credibility_base} (domain tier: ${s.domain_tier}, author: ${!!s.has_author}, date: ${!!s.has_date}, length: ${s.content_length}) adjusted by ${adjust >= 0 ? '+' : ''}${adjust} from the model.`,\n  evidence_dropped > 0 ? `${evidence_dropped} quote(s) were discarded because they could not be found verbatim in the page.` : '',\n  'These scores describe THIS ONE LINK, not whether the boycott claim is true overall.'\n].filter(Boolean).join(' ');\n\nreturn [{ json: {\n  url: ctx.url,\n  product: ctx.product,\n  cause: ctx.cause,\n  cache_key: ctx.cache_key,\n  available: true,\n  availability_note: '',\n  domain: ctx.domain,\n  content_length: ctx.content_length,\n  verdict,\n  support_strength,\n  credibility,\n  credibility_base: ctx.credibility_base,\n  credibility_adjust: adjust,\n  credibility_reason: (parsed.credibility_reason || '').toString().slice(0, 500),\n  mentions_product,\n  mentions_cause,\n  content_type: (parsed.content_type || 'other').toString(),\n  summary: (parsed.summary || '').toString().slice(0, 1000),\n  evidence,\n  evidence_dropped,\n  notes,\n  checked_at: new Date().toISOString(),\n  served_from: 'live'\n} }];"
+      },
+      "id": "v-score",
+      "name": "Score & Assemble",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1300,
+        340
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "upsert",
+        "schema": {
+          "__rl": true,
+          "mode": "list",
+          "value": "public"
+        },
+        "table": {
+          "__rl": true,
+          "mode": "list",
+          "value": "link_verifications"
+        },
+        "columns": {
+          "mappingMode": "defineBelow",
+          "matchingColumns": [
+            "cache_key"
+          ],
+          "value": {
+            "url": "={{ $json.url }}",
+            "product": "={{ $json.product }}",
+            "cause": "={{ $json.cause }}",
+            "cache_key": "={{ $json.cache_key }}",
+            "available": "={{ $json.available }}",
+            "availability_note": "={{ $json.availability_note }}",
+            "domain": "={{ $json.domain }}",
+            "content_length": "={{ $json.content_length }}",
+            "verdict": "={{ $json.verdict }}",
+            "support_strength": "={{ $json.support_strength }}",
+            "credibility": "={{ $json.credibility }}",
+            "credibility_base": "={{ $json.credibility_base }}",
+            "credibility_adjust": "={{ $json.credibility_adjust }}",
+            "credibility_reason": "={{ $json.credibility_reason }}",
+            "mentions_product": "={{ $json.mentions_product }}",
+            "mentions_cause": "={{ $json.mentions_cause }}",
+            "content_type": "={{ $json.content_type }}",
+            "summary": "={{ $json.summary }}",
+            "evidence": "={{ JSON.stringify($json.evidence) }}",
+            "evidence_dropped": "={{ $json.evidence_dropped }}",
+            "notes": "={{ $json.notes }}",
+            "checked_at": "={{ $json.checked_at }}"
+          }
+        },
+        "options": {}
+      },
+      "id": "v-upsert",
+      "name": "Upsert Verification",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [
+        1520,
+        540
+      ],
+      "notes": "Same Postgres credential as Cache Lookup."
+    },
+    {
+      "parameters": {
+        "jsCode": "// One slim, stable response shape. Add \"detail\": true (body) or ?detail=1 (query) for every field.\nconst wh = $('Webhook (POST /verify-link)').first().json;\nconst q = wh.query || {};\nconst b = wh.body || {};\nconst flag = String(q.detail !== undefined ? q.detail : (b.detail !== undefined ? b.detail : '')).toLowerCase();\nconst wantsDetail = flag === '1' || flag === 'true' || flag === 'yes';\n\nconst f = $json;\nconst slim = {\n  url: f.url,\n  product: f.product,\n  cause: f.cause,\n  verdict: f.verdict,                      // verified | weak_support | unrelated | contradicts_claim | unreachable\n  support_strength: f.support_strength,    // 0-100, does THIS page back THIS product + THIS cause\n  credibility: f.credibility,              // 0-100, is the source worth anything\n  summary: f.summary || f.availability_note || '',\n  evidence: f.evidence || [],              // verbatim quotes, already checked against the page\n  checked_at: f.checked_at,\n  served_from: f.served_from,\n};\n\nreturn [{ json: wantsDetail ? f : slim }];"
+      },
+      "id": "v-shape",
+      "name": "Shape Response",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1520,
+        300
+      ],
+      "notes": "Trims the payload to the 10 fields callers actually use. detail=true returns all 23."
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ JSON.stringify($json) }}",
+        "options": {}
+      },
+      "id": "v-respond",
+      "name": "Respond",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.2,
+      "position": [
+        1740,
+        300
+      ]
+    }
+  ],
+  "connections": {
+    "Normalize Input": {
+      "main": [
+        [
+          {
+            "node": "Cache Lookup",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Cache Lookup": {
+      "main": [
+        [
+          {
+            "node": "Evaluate Cache",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Evaluate Cache": {
+      "main": [
+        [
+          {
+            "node": "Fresh Cache?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Fresh Cache?": {
+      "main": [
+        [
+          {
+            "node": "Cached Result",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Tavily Extract",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Cached Result": {
+      "main": [
+        [
+          {
+            "node": "Shape Response",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Tavily Extract": {
+      "main": [
+        [
+          {
+            "node": "Check Availability",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Check Availability": {
+      "main": [
+        [
+          {
+            "node": "Link Available?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Link Available?": {
+      "main": [
+        [
+          {
+            "node": "Build LLM Context",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Unavailable Result",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Unavailable Result": {
+      "main": [
+        [
+          {
+            "node": "Upsert Verification",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Shape Response",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Build LLM Context": {
+      "main": [
+        [
+          {
+            "node": "LLM Verifier",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "LLM Verifier": {
+      "main": [
+        [
+          {
+            "node": "Score & Assemble",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Score & Assemble": {
+      "main": [
+        [
+          {
+            "node": "Upsert Verification",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Shape Response",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Webhook (POST /verify-link)": {
+      "main": [
+        [
+          {
+            "node": "Normalize Input",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Shape Response": {
+      "main": [
+        [
+          {
+            "node": "Respond",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "active": false
+}

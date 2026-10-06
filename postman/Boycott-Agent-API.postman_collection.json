@@ -1,0 +1,475 @@
+{
+  "info": {
+    "name": "Boycott Agent API",
+    "description": "The Boycott Agent API. Start it first:\n\n    docker compose up -d --build\n\nThen open this collection > Variables and paste your key into apiKey (from API_KEYS in .env: the part after \"name:\"). baseUrl is http://localhost:3000; change it to the public URL once deployed.\n\nRequests 2 and 3 use the SAME url with different causes: the first should come back 'verified', the second 'unrelated'. That pair proves the verifier discriminates instead of rubber-stamping any link.",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "variable": [
+    {
+      "key": "baseUrl",
+      "value": "http://localhost:3000",
+      "type": "string"
+    },
+    {
+      "key": "testUrl",
+      "value": "https://www.business-humanrights.org/en/latest-news/impact-of-boycotts-mcdonalds-and-starbucks-sales-decline-amid-war-on-gaza/",
+      "type": "string"
+    },
+    {
+      "key": "apiKey",
+      "value": "",
+      "type": "string"
+    }
+  ],
+  "item": [
+    {
+      "name": "1. Health",
+      "request": {
+        "method": "GET",
+        "header": [],
+        "url": {
+          "raw": "{{baseUrl}}/health",
+          "host": [
+            "{{baseUrl}}"
+          ],
+          "path": [
+            "health"
+          ]
+        },
+        "description": "Is the server up and can it reach Postgres? Run this first — if it fails, nothing else will work.",
+        "auth": {
+          "type": "noauth"
+        }
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test('server is up', () => pm.response.to.have.status(200));",
+              "pm.test('database reachable', () => pm.expect(pm.response.json().ok).to.be.true);"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "1b. No key (expect: 401)",
+      "request": {
+        "auth": {
+          "type": "noauth"
+        },
+        "method": "POST",
+        "header": [
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          }
+        ],
+        "body": {
+          "mode": "raw",
+          "options": {
+            "raw": {
+              "language": "json"
+            }
+          },
+          "raw": "{\n  \"brand\": \"Nike\"\n}"
+        },
+        "url": {
+          "raw": "{{baseUrl}}/v1/boycott-check",
+          "host": [
+            "{{baseUrl}}"
+          ],
+          "path": [
+            "v1",
+            "boycott-check"
+          ]
+        },
+        "description": "Same request as \"Boycott Check\" but without the key. Must be refused."
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test('refused without a key', () => pm.response.to.have.status(401));"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "2. Verify Link — matching cause (expect: verified)",
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          }
+        ],
+        "body": {
+          "mode": "raw",
+          "options": {
+            "raw": {
+              "language": "json"
+            }
+          },
+          "raw": "{\n  \"url\": \"{{testUrl}}\",\n  \"product\": \"Starbucks\",\n  \"cause\": \"perceived political stance on the Gaza war\"\n}"
+        },
+        "url": {
+          "raw": "{{baseUrl}}/v1/verify-link",
+          "host": [
+            "{{baseUrl}}"
+          ],
+          "path": [
+            "v1",
+            "verify-link"
+          ]
+        },
+        "description": "The page really is about Starbucks and the Gaza boycott, so this should return verdict 'verified' with a high support_strength.\n\nTakes ~10-15s the first time (Tavily fetch + LLM). Run it a second time and it comes back in under 100ms with served_from: 'cache'."
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "const r = pm.response.json();",
+              "pm.test('200 OK', () => pm.response.to.have.status(200));",
+              "pm.test('page supports the claim', () => pm.expect(r.verdict).to.equal('verified'));",
+              "pm.test('strong support', () => pm.expect(r.support_strength).to.be.above(69));",
+              "console.log(`verdict=${r.verdict} support=${r.support_strength} credibility=${r.credibility} from=${r.served_from}`);"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "3. Verify Link — WRONG cause (expect: unrelated)",
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          }
+        ],
+        "body": {
+          "mode": "raw",
+          "options": {
+            "raw": {
+              "language": "json"
+            }
+          },
+          "raw": "{\n  \"url\": \"{{testUrl}}\",\n  \"product\": \"Starbucks\",\n  \"cause\": \"child labour in cocoa farming\"\n}"
+        },
+        "url": {
+          "raw": "{{baseUrl}}/v1/verify-link",
+          "host": [
+            "{{baseUrl}}"
+          ],
+          "path": [
+            "v1",
+            "verify-link"
+          ]
+        },
+        "description": "Same URL as request 2, but a cause the page never discusses. Should come back 'unrelated' with support_strength near zero.\n\nIf this returns 'verified', the agent is rubber-stamping and something is wrong. This is the most important request in the collection."
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "const r = pm.response.json();",
+              "pm.test('200 OK', () => pm.response.to.have.status(200));",
+              "pm.test('does NOT falsely verify a mismatched cause', () => pm.expect(r.verdict).to.not.equal('verified'));",
+              "pm.test('support is capped', () => pm.expect(r.support_strength).to.be.below(36));",
+              "console.log(`verdict=${r.verdict} support=${r.support_strength}`);"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "4. Verify Link — full detail (?detail=1)",
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          }
+        ],
+        "body": {
+          "mode": "raw",
+          "options": {
+            "raw": {
+              "language": "json"
+            }
+          },
+          "raw": "{\n  \"url\": \"{{testUrl}}\",\n  \"product\": \"Starbucks\",\n  \"cause\": \"perceived political stance on the Gaza war\"\n}"
+        },
+        "url": {
+          "raw": "{{baseUrl}}/v1/verify-link?detail=1",
+          "host": [
+            "{{baseUrl}}"
+          ],
+          "path": [
+            "v1",
+            "verify-link"
+          ],
+          "query": [
+            {
+              "key": "detail",
+              "value": "1"
+            }
+          ]
+        },
+        "description": "Same request with ?detail=1 — returns all 23 stored fields instead of 10: credibility_base / credibility_adjust / credibility_reason, mentions_product, mentions_cause, content_type, evidence_dropped, domain, content_length, notes.\n\nUse this when a score looks wrong and you want to see how it was built. You can also send \"detail\": true in the body instead."
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "const r = pm.response.json();",
+              "pm.test('200 OK', () => pm.response.to.have.status(200));",
+              "pm.test('includes the score breakdown', () => pm.expect(r).to.have.property('credibility_base'));",
+              "console.log(`credibility ${r.credibility} = base ${r.credibility_base} ${r.credibility_adjust >= 0 ? '+' : ''}${r.credibility_adjust} (model)`);"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "5. Verify Link — dead link (expect: unreachable)",
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          }
+        ],
+        "body": {
+          "mode": "raw",
+          "options": {
+            "raw": {
+              "language": "json"
+            }
+          },
+          "raw": "{\n  \"url\": \"https://www.aljazeera.com/this-page-does-not-exist-12345\",\n  \"product\": \"Starbucks\",\n  \"cause\": \"perceived political stance on the Gaza war\"\n}"
+        },
+        "url": {
+          "raw": "{{baseUrl}}/v1/verify-link",
+          "host": [
+            "{{baseUrl}}"
+          ],
+          "path": [
+            "v1",
+            "verify-link"
+          ]
+        },
+        "description": "A URL that 404s. The agent should return verdict 'unreachable' with a note explaining why — NOT a made-up verdict, and NOT a crash. Honest failure is the point."
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "const r = pm.response.json();",
+              "pm.test('200 OK (a dead link is an answer, not an error)', () => pm.response.to.have.status(200));",
+              "pm.test('reported as unreachable', () => pm.expect(r.verdict).to.equal('unreachable'));",
+              "pm.test('no fabricated score', () => pm.expect(r.support_strength).to.equal(0));"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "6. Verify Link — bad input (expect: 400)",
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          }
+        ],
+        "body": {
+          "mode": "raw",
+          "options": {
+            "raw": {
+              "language": "json"
+            }
+          },
+          "raw": "{\n  \"url\": \"not-a-url\",\n  \"product\": \"Starbucks\",\n  \"cause\": \"anything\"\n}"
+        },
+        "url": {
+          "raw": "{{baseUrl}}/v1/verify-link",
+          "host": [
+            "{{baseUrl}}"
+          ],
+          "path": [
+            "v1",
+            "verify-link"
+          ]
+        },
+        "description": "Malformed input should come back as a clean 400 with a readable message, not a 500."
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test('400 Bad Request', () => pm.response.to.have.status(400));",
+              "pm.test('explains what is wrong', () => pm.expect(pm.response.json().error).to.be.a('string'));"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "7. Boycott Check",
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          }
+        ],
+        "body": {
+          "mode": "raw",
+          "options": {
+            "raw": {
+              "language": "json"
+            }
+          },
+          "raw": "{\n  \"brand\": \"Nike\"\n}"
+        },
+        "url": {
+          "raw": "{{baseUrl}}/v1/boycott-check",
+          "host": [
+            "{{baseUrl}}"
+          ],
+          "path": [
+            "v1",
+            "boycott-check"
+          ]
+        },
+        "description": "Agent 1. Searches the live web and reports whether the brand faces a consumer boycott.\n\nstatus: active_boycott | no_evidence | unclear\nconfidence: 0-100, computed in code from source count + recency + authority. It is NOT a survey of how many people boycott.\n\nTry other brands: Coca-Cola, McDonald's, Starbucks, Puma."
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "const r = pm.response.json();",
+              "pm.test('200 OK', () => pm.response.to.have.status(200));",
+              "pm.test('has a valid status', () => pm.expect(['active_boycott','no_evidence','unclear']).to.include(r.status));",
+              "pm.test('sources are real', () => pm.expect(r.sources).to.be.an('array'));",
+              "console.log(`${r.brand}: ${r.status} (confidence ${r.confidence}), ${r.sources.length} sources`);"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "8. Brand Report (both agents chained)",
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          }
+        ],
+        "body": {
+          "mode": "raw",
+          "options": {
+            "raw": {
+              "language": "json"
+            }
+          },
+          "raw": "{\n  \"brand\": \"Starbucks\",\n  \"max_sources\": 2\n}"
+        },
+        "url": {
+          "raw": "{{baseUrl}}/v1/brand-report",
+          "host": [
+            "{{baseUrl}}"
+          ],
+          "path": [
+            "v1",
+            "brand-report"
+          ]
+        },
+        "description": "Runs Agent 1, then puts each source it found through Agent 2.\n\nSLOW — roughly 15s per source, so max_sources: 2 takes ~40s. Raise Postman's timeout if needed (Settings > General > Request timeout = 0 for no limit).\n\nWatch the gap between 'confidence' and 'evidence_score'. High confidence + low evidence_score = lots of coverage, but nothing that survives being audited. That gap is the whole reason this endpoint exists."
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "const r = pm.response.json();",
+              "pm.test('200 OK', () => pm.response.to.have.status(200));",
+              "pm.test('audited the sources', () => pm.expect(r.sources_checked).to.be.at.least(0));",
+              "console.log(`${r.brand}: confidence ${r.confidence} vs evidence_score ${r.evidence_score} (${r.sources_verified}/${r.sources_checked} verified)`);"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "9. Usage (shared budget left today)",
+      "request": {
+        "method": "GET",
+        "header": [],
+        "url": {
+          "raw": "{{baseUrl}}/v1/usage",
+          "host": [
+            "{{baseUrl}}"
+          ],
+          "path": [
+            "v1",
+            "usage"
+          ]
+        },
+        "description": "What the shared research budget has left today and this month. Free: costs no units. When tavily_credits.today.remaining is 0, new checks return 503 BudgetExceeded until midnight UTC; cached answers still work."
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "const r = pm.response.json();",
+              "pm.test('200 OK', () => pm.response.to.have.status(200));",
+              "pm.test('reports the Tavily budget', () => pm.expect(r.tavily_credits.today).to.have.property('remaining'));",
+              "console.log(`Tavily today: ${r.tavily_credits.today.used}/${r.tavily_credits.today.limit}, month: ${r.tavily_credits.this_month.used}/${r.tavily_credits.this_month.limit}`);"
+            ]
+          }
+        }
+      ]
+    }
+  ],
+  "auth": {
+    "type": "bearer",
+    "bearer": [
+      {
+        "key": "token",
+        "value": "{{apiKey}}",
+        "type": "string"
+      }
+    ]
+  }
+}

@@ -1,0 +1,164 @@
+{
+  "name": "Boycott Agent — Daily Refresher",
+  "nodes": [
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            { "field": "hours", "hoursInterval": 24, "triggerAtHour": 3 }
+          ]
+        }
+      },
+      "id": "node-schedule",
+      "name": "Every day @ 03:00",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [-820, 300]
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT brand_name, brand_normalized FROM brand_boycott_status WHERE last_checked < now() - interval '1 day' ORDER BY last_checked ASC LIMIT 50;",
+        "options": {}
+      },
+      "id": "node-select-brands",
+      "name": "Select Stale Brands",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [-600, 300],
+      "notes": "Refreshes brands not checked in >1 day, oldest first, 50 per run. Select your Postgres credential."
+    },
+    {
+      "parameters": {
+        "options": { "reset": false }
+      },
+      "id": "node-loop",
+      "name": "Loop Over Brands",
+      "type": "n8n-nodes-base.splitInBatches",
+      "typeVersion": 3,
+      "position": [-380, 300]
+    },
+    {
+      "parameters": {
+        "jsCode": "// One brand per item -> build the search query.\nconst brandRaw = ($json.brand_name || '').toString().trim();\nconst brand_normalized = ($json.brand_normalized || brandRaw.toLowerCase()).trim();\nconst year = new Date().getFullYear();\nconst query = `${brandRaw} boycott campaign ${year} why boycotting reason`;\nreturn [{ json: { brand: brandRaw, brand_normalized, query } }];"
+      },
+      "id": "node-build-query",
+      "name": "Build Query",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [-160, 200]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.tavily.com/search",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            { "name": "Authorization", "value": "=Bearer {{ $env.TAVILY_API_KEY }}" },
+            { "name": "Content-Type", "value": "application/json" }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ query: $json.query, search_depth: 'advanced', topic: 'news', days: 365, max_results: 8, include_answer: false }) }}",
+        "options": {}
+      },
+      "id": "node-tavily",
+      "name": "Tavily Search",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [60, 200]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Build grounding context + real signals. 'ctx' comes from the Build Query node in THIS iteration.\nconst ctx = $('Build Query').item.json;\nconst tav = $input.first().json;\nconst raw = tav.results || [];\nconst results = raw.map(r => ({\n  title: r.title,\n  url: r.url,\n  content: (r.content || '').slice(0, 800),\n  published_date: r.published_date || null\n}));\n\nlet newestDays = null;\nfor (const r of results) {\n  if (r.published_date) {\n    const d = (Date.now() - new Date(r.published_date).getTime()) / 86400000;\n    if (!isNaN(d) && (newestDays === null || d < newestDays)) newestDays = d;\n  }\n}\n\nconst sourceList = results.map((r, i) =>\n  `[${i + 1}] ${r.title}\\nURL: ${r.url}\\nDate: ${r.published_date || 'unknown'}\\n${r.content}`\n).join('\\n\\n');\n\nconst system = 'You are a neutral research assistant. You are given web search results about whether a brand faces a consumer boycott. Use ONLY the information in the results. Do not use prior knowledge. Do not invent URLs. Stay neutral and take no side. If the results do not clearly describe a boycott of this brand, set status to \"no_evidence\". Respond with ONLY a JSON object and no other text.';\n\nconst user = `Brand: ${ctx.brand}\\n\\nSearch results:\\n${sourceList || '(no results returned)'}\\n\\nReturn a JSON object with exactly these fields:\\n{\\n  \"status\": \"active_boycott\" | \"no_evidence\" | \"unclear\",\\n  \"reason\": \"short neutral summary of why people boycott, or empty string\",\\n  \"who_is_calling\": \"who is calling for the boycott, or empty string\",\\n  \"authority_level\": \"high\" | \"medium\" | \"low\",\\n  \"used_source_urls\": [\"urls from the results you relied on\"]\\n}`;\n\nconst payload = {\n  model: $env.LLM_MODEL || 'gpt-4o-mini',\n  temperature: 0,\n  response_format: { type: 'json_object' },\n  messages: [\n    { role: 'system', content: system },\n    { role: 'user', content: user }\n  ]\n};\n\nreturn [{ json: { ...ctx, results, signals: { sourceCount: results.length, newestDays }, llmPayload: payload } }];"
+      },
+      "id": "node-build-context",
+      "name": "Build LLM Context",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [280, 200]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $env.LLM_BASE_URL }}/chat/completions",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            { "name": "Authorization", "value": "=Bearer {{ $env.LLM_API_KEY }}" },
+            { "name": "Content-Type", "value": "application/json" }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify($json.llmPayload) }}",
+        "options": {}
+      },
+      "id": "node-llm",
+      "name": "LLM Judge",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [500, 200]
+    },
+    {
+      "parameters": {
+        "jsCode": "const ctx = $('Build LLM Context').item.json;\nconst resp = $input.first().json;\nlet content = (resp.choices && resp.choices[0] && resp.choices[0].message && resp.choices[0].message.content) || '{}';\nlet parsed;\ntry { parsed = JSON.parse(content); } catch (e) {\n  parsed = { status: 'unclear', reason: '', who_is_calling: '', authority_level: 'low', used_source_urls: [] };\n}\n\nconst sourceCount = (ctx.signals && ctx.signals.sourceCount) || 0;\nconst newestDays = ctx.signals ? ctx.signals.newestDays : null;\n\nconst sourceScore = Math.min(sourceCount, 6) / 6 * 45;\nlet recencyScore;\nif (newestDays === null) recencyScore = 5;\nelse if (newestDays <= 7)   recencyScore = 30;\nelse if (newestDays <= 30)  recencyScore = 22;\nelse if (newestDays <= 180) recencyScore = 12;\nelse                        recencyScore = 4;\nconst authScore = parsed.authority_level === 'high' ? 25 : parsed.authority_level === 'medium' ? 15 : 6;\n\nlet confidence = Math.round(sourceScore + recencyScore + authScore);\nif (parsed.status === 'no_evidence') confidence = Math.min(confidence, 12);\nif (parsed.status === 'unclear')     confidence = Math.min(confidence, 45);\nconfidence = Math.max(0, Math.min(100, confidence));\n\nlet cited = ctx.results.filter(r => (parsed.used_source_urls || []).includes(r.url));\nif (cited.length === 0) cited = ctx.results;\nconst sources = cited.slice(0, 8).map(r => ({ title: r.title, url: r.url, date: r.published_date }));\n\nconst notes = `Confidence = likelihood that an active boycott exists, derived from source count (${sourceCount})` +\n  (newestDays !== null ? ` and recency (newest source ~${Math.round(newestDays)} days old)` : '') +\n  `. It is NOT a survey of how many people boycott. Verify via the sources.`;\n\nconst out = {\n  brand: ctx.brand,\n  brand_normalized: ctx.brand_normalized,\n  status: parsed.status,\n  confidence,\n  reason: parsed.reason || '',\n  who_is_calling: parsed.who_is_calling || '',\n  recency: newestDays !== null ? `newest source ~${Math.round(newestDays)} days old` : 'unknown',\n  sources,\n  notes,\n  last_checked: new Date().toISOString()\n};\nreturn [{ json: out }];"
+      },
+      "id": "node-score",
+      "name": "Compute Score & Assemble",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [720, 200]
+    },
+    {
+      "parameters": {
+        "operation": "upsert",
+        "schema": { "__rl": true, "mode": "list", "value": "public" },
+        "table": { "__rl": true, "mode": "list", "value": "brand_boycott_status" },
+        "columns": {
+          "mappingMode": "defineBelow",
+          "matchingColumns": ["brand_normalized"],
+          "value": {
+            "brand_name": "={{ $json.brand }}",
+            "brand_normalized": "={{ $json.brand_normalized }}",
+            "status": "={{ $json.status }}",
+            "confidence": "={{ $json.confidence }}",
+            "reason": "={{ $json.reason }}",
+            "who_is_calling": "={{ $json.who_is_calling }}",
+            "recency": "={{ $json.recency }}",
+            "sources": "={{ JSON.stringify($json.sources) }}",
+            "notes": "={{ $json.notes }}",
+            "last_checked": "={{ $json.last_checked }}"
+          }
+        },
+        "options": {}
+      },
+      "id": "node-upsert",
+      "name": "Upsert Status",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [940, 200],
+      "notes": "Loops back to process the next brand."
+    }
+  ],
+  "connections": {
+    "Every day @ 03:00": { "main": [[{ "node": "Select Stale Brands", "type": "main", "index": 0 }]] },
+    "Select Stale Brands": { "main": [[{ "node": "Loop Over Brands", "type": "main", "index": 0 }]] },
+    "Loop Over Brands": {
+      "main": [
+        [],
+        [{ "node": "Build Query", "type": "main", "index": 0 }]
+      ]
+    },
+    "Build Query": { "main": [[{ "node": "Tavily Search", "type": "main", "index": 0 }]] },
+    "Tavily Search": { "main": [[{ "node": "Build LLM Context", "type": "main", "index": 0 }]] },
+    "Build LLM Context": { "main": [[{ "node": "LLM Judge", "type": "main", "index": 0 }]] },
+    "LLM Judge": { "main": [[{ "node": "Compute Score & Assemble", "type": "main", "index": 0 }]] },
+    "Compute Score & Assemble": { "main": [[{ "node": "Upsert Status", "type": "main", "index": 0 }]] },
+    "Upsert Status": { "main": [[{ "node": "Loop Over Brands", "type": "main", "index": 0 }]] }
+  },
+  "settings": { "executionOrder": "v1" },
+  "active": false
+}

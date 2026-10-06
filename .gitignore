@@ -1,0 +1,21 @@
+# Never commit real secrets
+.env
+
+# Local data
+postgres_data/
+n8n_data/
+
+# Node server
+node_modules/
+server/eval/results/
+npm-debug.log*
+
+# Saved copies of third-party news pages and search results (other people's copyrighted
+# text). Kept locally for the answer keys; recreate with: npm run eval:snapshot / eval:brands:snapshot
+server/eval/pages/
+server/eval/pages-basic/
+server/eval/searches/
+server/eval/searches-basic/
+
+# Personal Claude Code settings
+.claude/settings.local.json

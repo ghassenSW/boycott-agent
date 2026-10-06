@@ -1,0 +1,225 @@
+[
+  {
+    "brand": "Starbucks",
+    "ideal": "active_boycott",
+    "accept": [
+      "active_boycott"
+    ],
+    "relevant": [
+      1,
+      2,
+      3,
+      4,
+      5,
+      6,
+      7,
+      8
+    ],
+    "why": "Starbucks Workers United boycott announced Aug 2026, backed by Philadelphia's city council (Oct 2026); BDS-related boycott also discussed."
+  },
+  {
+    "brand": "McDonald's",
+    "ideal": "active_boycott",
+    "accept": [
+      "active_boycott",
+      "unclear"
+    ],
+    "relevant": [
+      3,
+      4,
+      6,
+      7
+    ],
+    "why": "BDS 'escalate the boycott' call naming McDonald's (Feb 2026). Most other results are unrelated (plastics law, US boycott, Lunar New Year ads, a politician called Donalds)."
+  },
+  {
+    "brand": "McDonalds",
+    "ideal": "active_boycott",
+    "accept": [
+      "active_boycott",
+      "unclear"
+    ],
+    "relevant": [
+      1,
+      2
+    ],
+    "why": "Spelling variant. Students boycotting McDonald's (Mar 2026) and the BDS call. #5 is a fact-check of a FALSE boycott claim, not evidence."
+  },
+  {
+    "brand": "Carrefour",
+    "ideal": "active_boycott",
+    "accept": [
+      "active_boycott"
+    ],
+    "relevant": [
+      1,
+      2,
+      4,
+      5,
+      6,
+      7,
+      8
+    ],
+    "why": "#BoycottCarrefour BDS campaign, store actions in France (May 2026), boycott calls over Israeli contracts (Aug 2026)."
+  },
+  {
+    "brand": "Adidas",
+    "ideal": "active_boycott",
+    "accept": [
+      "active_boycott"
+    ],
+    "relevant": [
+      1,
+      2,
+      3,
+      4,
+      5,
+      6,
+      7,
+      8
+    ],
+    "why": "Global boycott calls over an ad featuring a former Israeli soldier (Sep 2026)."
+  },
+  {
+    "brand": "Nike",
+    "ideal": "unclear",
+    "accept": [
+      "unclear",
+      "no_evidence"
+    ],
+    "relevant": [
+      1,
+      4,
+      6,
+      7
+    ],
+    "why": "Only a TikTok call and an explainer are current. #3 is about ADIDAS. #6 (Kaepernick, 2018) and #7 (Xinjiang, 2021) talk about PAST boycotts: relevant as sources, but not evidence of a current one."
+  },
+  {
+    "brand": "Coca-Cola",
+    "ideal": "active_boycott",
+    "accept": [
+      "active_boycott"
+    ],
+    "relevant": [
+      1,
+      2,
+      3,
+      5,
+      6,
+      7,
+      8
+    ],
+    "why": "Pro-Palestine boycott explained (Aug 2026), people boycotting it (Mar 2026), boycott over blocked religious phrases on cans (Aug 2026)."
+  },
+  {
+    "brand": "coca cola",
+    "ideal": "active_boycott",
+    "accept": [
+      "active_boycott"
+    ],
+    "relevant": [
+      1,
+      2,
+      3,
+      5,
+      6,
+      7,
+      8
+    ],
+    "why": "Spelling variant of Coca-Cola; same search results."
+  },
+  {
+    "brand": "Bud Light",
+    "ideal": "no_evidence",
+    "accept": [
+      "no_evidence",
+      "unclear"
+    ],
+    "relevant": [
+      1,
+      2,
+      3,
+      4,
+      5,
+      6,
+      7,
+      8
+    ],
+    "why": "Every result looks back at the 2023 boycott; nothing describes a boycott happening now."
+  },
+  {
+    "brand": "Puma",
+    "ideal": "unclear",
+    "accept": [
+      "unclear",
+      "no_evidence"
+    ],
+    "relevant": [
+      2,
+      4,
+      8
+    ],
+    "why": "The BDS campaign ended when Puma dropped the Israel team in 2023; one 2026 thread asks whether it still applies. #1 is about Adidas."
+  },
+  {
+    "brand": "Lego",
+    "ideal": "no_evidence",
+    "accept": [
+      "no_evidence",
+      "unclear"
+    ],
+    "relevant": [],
+    "why": "Trap: Lego appears as an advertiser accused of boycotting X, i.e. the boycotter, not the target. Other results are a retailer dispute and product news."
+  },
+  {
+    "brand": "Toyota",
+    "ideal": "unclear",
+    "accept": [
+      "unclear",
+      "no_evidence"
+    ],
+    "relevant": [
+      1,
+      5
+    ],
+    "why": "Scattered undated social-media calls; one post explicitly says 'we are not boycotting Toyota'."
+  },
+  {
+    "brand": "IKEA",
+    "ideal": "no_evidence",
+    "accept": [
+      "no_evidence"
+    ],
+    "relevant": [
+      1
+    ],
+    "why": "Nothing current: #1 is a book excerpt about a boycott in IKEA's early history (relevant, but past); the rest is product news and an unreadable page."
+  },
+  {
+    "brand": "Tesla",
+    "ideal": "active_boycott",
+    "accept": [
+      "active_boycott",
+      "unclear"
+    ],
+    "relevant": [
+      1,
+      2,
+      3,
+      4,
+      5,
+      6
+    ],
+    "why": "Tesla Takedown protests scheduled into Nov 2026; new boycott calls after the racism trial (Sep 2026). One thread asks why the boycott faded."
+  },
+  {
+    "brand": "Zorvex Kitchenware",
+    "ideal": "no_evidence",
+    "accept": [
+      "no_evidence"
+    ],
+    "relevant": [],
+    "why": "Made-up brand. Every result is about something else (one is about Starbucks). Must not invent a boycott or list sources."
+  }
+]

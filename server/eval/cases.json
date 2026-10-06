@@ -1,0 +1,209 @@
+[
+  {
+    "id": "bhrrc-starbucks-gaza",
+    "url": "https://www.business-humanrights.org/en/latest-news/impact-of-boycotts-mcdonalds-and-starbucks-sales-decline-amid-war-on-gaza/",
+    "product": "Starbucks",
+    "cause": "boycott by supporters of Palestine over the war in Gaza",
+    "ideal": "verified",
+    "accept": ["verified"],
+    "why": "Article body says both chains blame boycotts by supporters of Palestine amid the Gaza war. The body starts after ~16k characters of menus."
+  },
+  {
+    "id": "bhrrc-starbucks-wrong-cause",
+    "url": "https://www.business-humanrights.org/en/latest-news/impact-of-boycotts-mcdonalds-and-starbucks-sales-decline-amid-war-on-gaza/",
+    "product": "Starbucks",
+    "cause": "child labour in cocoa farming",
+    "ideal": "unrelated",
+    "accept": ["unrelated"],
+    "why": "Right brand, cause never discussed."
+  },
+  {
+    "id": "fortune-mcdonalds-gaza",
+    "url": "https://fortune.com/2024/07/30/mcdonalds-gaza-boycott-israel-muslims-france-quarterly-sales-kempczinski",
+    "product": "McDonald's",
+    "cause": "boycott over Israel's war in Gaza",
+    "ideal": "verified",
+    "accept": ["verified"],
+    "why": "'A boycott sparked by the war in Gaza helped contribute to McDonald's first quarterly decline'."
+  },
+  {
+    "id": "fortune-mcdonalds-price-trap",
+    "url": "https://fortune.com/2024/07/30/mcdonalds-gaza-boycott-israel-muslims-france-quarterly-sales-kempczinski",
+    "product": "McDonald's",
+    "cause": "consumers boycotting McDonald's over the price of Happy Meals",
+    "ideal": "unrelated",
+    "accept": ["unrelated", "weak_support"],
+    "why": "Trap: Happy Meal pricing is mentioned, but as McDonald's own fix for France, not as a boycott cause. 'verified' would be a false positive."
+  },
+  {
+    "id": "bbc-mcdonalds-free-meals",
+    "url": "https://www.bbc.com/news/business-67885910",
+    "product": "McDonald's",
+    "cause": "McDonald's Israel giving free meals to Israeli soldiers",
+    "ideal": "verified",
+    "accept": ["verified"],
+    "why": "'McDonald's Israel said it had given away thousands of free meals to members of the Israeli military. The moves sparked grassroots calls for boycotts'."
+  },
+  {
+    "id": "bbc-mcdonalds-starbucks-passing-mention",
+    "url": "https://www.bbc.com/news/business-67885910",
+    "product": "Starbucks",
+    "cause": "boycott over the Israel-Gaza war",
+    "ideal": "weak_support",
+    "accept": ["weak_support", "verified"],
+    "why": "The article is about McDonald's; Starbucks gets one line ('Starbucks has also been affected'). Partial support at best."
+  },
+  {
+    "id": "bbc-budlight-mulvaney",
+    "url": "https://www.bbc.com/news/business-66398296",
+    "product": "Bud Light",
+    "cause": "partnership with transgender influencer Dylan Mulvaney",
+    "ideal": "verified",
+    "accept": ["verified"],
+    "why": "Headline: 'Bud Light boycott over trans influencer Dylan Mulvaney hits beer giant's sales'."
+  },
+  {
+    "id": "bbc-budlight-wrong-cause",
+    "url": "https://www.bbc.com/news/business-66398296",
+    "product": "Bud Light",
+    "cause": "support for Israel in the Gaza war",
+    "ideal": "unrelated",
+    "accept": ["unrelated"],
+    "why": "A real boycott, but Israel is never mentioned. Tests that a boycott article doesn't verify any boycott cause."
+  },
+  {
+    "id": "aljazeera-adidas-soldier-ad",
+    "url": "https://www.aljazeera.com/sports/2026/9/6/adidas-faces-boycott-calls-over-campaign-featuring-former-israeli-soldier",
+    "product": "Adidas",
+    "cause": "advertising campaign featuring a former Israeli soldier",
+    "ideal": "verified",
+    "accept": ["verified"],
+    "why": "Headline and body: boycott calls over an ad featuring former Israeli soldier Shalev Biton."
+  },
+  {
+    "id": "aljazeera-adidas-wrong-brand",
+    "url": "https://www.aljazeera.com/sports/2026/9/6/adidas-faces-boycott-calls-over-campaign-featuring-former-israeli-soldier",
+    "product": "Nike",
+    "cause": "advertising campaign featuring a former Israeli soldier",
+    "ideal": "unrelated",
+    "accept": ["unrelated"],
+    "why": "Exact cause, wrong brand. Nike never appears on the page."
+  },
+  {
+    "id": "starbucks-official-denial",
+    "url": "https://about.starbucks.com/press/2023/facts-about-starbucks-in-the-middle-east",
+    "product": "Starbucks",
+    "cause": "Starbucks financially supports the Israeli government and army",
+    "ideal": "contradicts_claim",
+    "accept": ["contradicts_claim"],
+    "why": "Company page: 'Rumors that Starbucks or Howard provides financial support to the Israeli government and/or the Israeli Army are unequivocally false.'"
+  },
+  {
+    "id": "jta-starbucks-denial",
+    "url": "https://www.jta.org/2014/08/10/israel/starbucks-we-dont-provide-financial-support-to-israel",
+    "product": "Starbucks",
+    "cause": "Starbucks financially supports the Israeli army",
+    "ideal": "contradicts_claim",
+    "accept": ["contradicts_claim"],
+    "why": "News report of Starbucks denying the claim; calls the rumours false."
+  },
+  {
+    "id": "businessinsider-mcdonalds-no-boycott",
+    "url": "https://www.businessinsider.com/mcdonalds-sales-drop-among-low-income-diners-numerator-finds-2026-8",
+    "product": "McDonald's",
+    "cause": "boycott over Israel's war in Gaza",
+    "ideal": "unrelated",
+    "accept": ["unrelated"],
+    "why": "Hard negative: right brand, falling sales, but the cause is prices and value menus. No boycott, no Gaza."
+  },
+  {
+    "id": "reuters-blocked",
+    "url": "https://www.reuters.com/business/coca-cola-cfo-flags-uneven-demand-warns-middle-east-risks-into-2027-2026-06-04/",
+    "product": "Coca-Cola",
+    "cause": "boycott in the Middle East over the Gaza war",
+    "ideal": "unreachable",
+    "accept": ["unreachable"],
+    "why": "Reuters blocks the extractor. Must not invent a verdict."
+  },
+  {
+    "id": "bds-carrefour-settlements",
+    "url": "https://bdsmovement.net/boycott-carrefour",
+    "product": "Carrefour",
+    "cause": "franchise partnership with an Israeli company active in illegal settlements",
+    "ideal": "verified",
+    "accept": ["verified"],
+    "why": "Advocacy page calling for the boycott for exactly this reason (Electra Consumer Products / Yenot Bitan). Support is clear; credibility should be lower than a news outlet."
+  },
+  {
+    "id": "lemonde-carrefour-fr",
+    "url": "https://www.lemonde.fr/afrique/article/2023/11/21/au-maroc-les-groupes-carrefour-et-mcdonald-s-cibles-par-un-boycott-sur-fond-de-guerre-a-gaza_6201539_3212.html",
+    "product": "Carrefour",
+    "cause": "donating food parcels to Israeli soldiers",
+    "ideal": "verified",
+    "accept": ["verified", "weak_support"],
+    "why": "French, paywalled after the intro. The visible part has the boycott call and the quote 'Carrefour a fait don de milliers de colis alimentaires aux soldats'."
+  },
+  {
+    "id": "lemonde-mcdonalds-paywalled-fr",
+    "url": "https://www.lemonde.fr/afrique/article/2023/11/21/au-maroc-les-groupes-carrefour-et-mcdonald-s-cibles-par-un-boycott-sur-fond-de-guerre-a-gaza_6201539_3212.html",
+    "product": "McDonald's",
+    "cause": "free meals given to Israeli soldiers",
+    "ideal": "weak_support",
+    "accept": ["weak_support", "unrelated"],
+    "why": "McDonald's is only in the headline; the free-meals reason is behind the paywall. 'verified' would claim more than the visible page says."
+  },
+  {
+    "id": "rts-mcdonalds-free-meals-fr",
+    "url": "https://www.rts.ch/info/monde/14412350-comment-mcdonalds-sest-retrouve-au-coeur-du-conflit-au-procheorient.html",
+    "product": "McDonald's",
+    "cause": "free meals given to Israeli soldiers by the Israeli franchise",
+    "ideal": "verified",
+    "accept": ["verified"],
+    "why": "French: the Israeli franchise offered free meals to soldiers; #BoycottMcDonalds calls followed."
+  },
+  {
+    "id": "rts-wrong-brand-fr",
+    "url": "https://www.rts.ch/info/monde/14412350-comment-mcdonalds-sest-retrouve-au-coeur-du-conflit-au-procheorient.html",
+    "product": "Coca-Cola",
+    "cause": "free meals given to Israeli soldiers",
+    "ideal": "unrelated",
+    "accept": ["unrelated"],
+    "why": "Coca-Cola never appears on the page."
+  },
+  {
+    "id": "bbcarabic-mcdonalds-ar",
+    "url": "https://www.bbc.com/arabic/articles/c72g1xly72no",
+    "product": "McDonald's",
+    "cause": "boycott over its perceived support for Israel in the Gaza war",
+    "ideal": "verified",
+    "accept": ["verified"],
+    "why": "Arabic, brand written ماكدونالدز. Sales fell because customers boycotted it for its 'clear support' of Israel in the Gaza war."
+  },
+  {
+    "id": "bbcarabic-wrong-cause-ar",
+    "url": "https://www.bbc.com/arabic/articles/c72g1xly72no",
+    "product": "McDonald's",
+    "cause": "child labour in its supply chain",
+    "ideal": "unrelated",
+    "accept": ["unrelated"],
+    "why": "Arabic page, cause never discussed."
+  },
+  {
+    "id": "aljazeeranet-starbucks-ar",
+    "url": "https://www.aljazeera.net/ebusiness/2024/8/21/%D8%AA%D8%B1%D8%A7%D8%AC%D8%B9%D8%AA-%D9%85%D8%A8%D9%8A%D8%B9%D8%A7%D8%AA%D9%87%D8%A7-%D9%81%D9%8A-%D8%A7%D9%84%D8%B4%D8%B1%D9%82-%D8%A7%D9%84%D8%A3%D9%88%D8%B3%D8%B7",
+    "product": "Starbucks",
+    "cause": "consumer boycott in the Middle East over support for Israel's war on Gaza",
+    "ideal": "verified",
+    "accept": ["verified", "weak_support"],
+    "why": "Arabic, brand written ستاربكس. Headline: the boycott is holding back big brands that support Israel; body cites Starbucks' Middle East 'challenges'."
+  },
+  {
+    "id": "soft-404",
+    "url": "https://www.aljazeera.com/this-page-does-not-exist-12345",
+    "product": "Starbucks",
+    "cause": "boycott over the Gaza war",
+    "ideal": "unreachable",
+    "accept": ["unreachable"],
+    "why": "Styled 404 page with 4k characters of menu."
+  }
+]

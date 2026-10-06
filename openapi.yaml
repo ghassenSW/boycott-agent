@@ -1,0 +1,253 @@
+openapi: 3.0.3
+info:
+  title: Boycott Agent API
+  version: "1.0.0"
+  description: >
+    Checks consumer boycotts against live web sources. Scores are computed in code from
+    what was found; quotes are verified to appear on the page. See API.md for the full guide.
+    Call from your server only: the key must never reach a browser.
+servers:
+  - url: https://api.example.com
+    description: Replace with the URL you were given
+  - url: http://localhost:3000
+    description: Local Docker
+security:
+  - bearerAuth: []
+
+paths:
+  /health:
+    get:
+      operationId: health
+      summary: Liveness and database check
+      security: []
+      responses:
+        "200":
+          description: Up
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  ok: { type: boolean, example: true }
+                  uptime_s: { type: integer }
+
+  /v1/usage:
+    get:
+      operationId: usage
+      summary: What the shared research budget has left today and this month
+      description: Free (costs no usage units).
+      responses:
+        "200":
+          description: Budget status
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  tavily_credits:
+                    type: object
+                    properties:
+                      today: { $ref: "#/components/schemas/BudgetLine" }
+                      this_month: { $ref: "#/components/schemas/BudgetLine" }
+                  llm_calls:
+                    type: object
+                    properties:
+                      today: { $ref: "#/components/schemas/BudgetLine" }
+                  resets:
+                    type: object
+                    properties:
+                      daily: { type: string }
+                      monthly: { type: string }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+
+  /v1/verify-link:
+    post:
+      operationId: verifyLink
+      summary: Does this page support "boycott PRODUCT because of CAUSE"?
+      parameters: [{ $ref: "#/components/parameters/detail" }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [url, product, cause]
+              properties:
+                url: { type: string, format: uri, example: "https://www.bbc.com/news/business-66398296" }
+                product: { type: string, example: Bud Light }
+                cause: { type: string, example: partnership with transgender influencer Dylan Mulvaney }
+                detail: { type: boolean, description: Return every stored field }
+      responses:
+        "200":
+          description: Verification result
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/LinkVerification" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "429": { $ref: "#/components/responses/RateLimited" }
+        "502": { $ref: "#/components/responses/Upstream" }
+        "503": { $ref: "#/components/responses/BudgetExceeded" }
+
+  /v1/boycott-check:
+    post:
+      operationId: boycottCheck
+      summary: Is this brand the target of a consumer boycott?
+      parameters: [{ $ref: "#/components/parameters/detail" }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [brand]
+              properties:
+                brand: { type: string, example: Nike }
+                detail: { type: boolean }
+      responses:
+        "200":
+          description: Brand status
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/BrandStatus" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "429": { $ref: "#/components/responses/RateLimited" }
+        "502": { $ref: "#/components/responses/Upstream" }
+        "503": { $ref: "#/components/responses/BudgetExceeded" }
+
+  /v1/brand-report:
+    post:
+      operationId: brandReport
+      summary: Brand status, then an audit of each source found
+      description: Costs 1 + max_sources usage units. Can take several minutes.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [brand]
+              properties:
+                brand: { type: string, example: Starbucks }
+                max_sources: { type: integer, minimum: 1, maximum: 8, default: 3 }
+      responses:
+        "200":
+          description: Report
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/BrandReport" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "429": { $ref: "#/components/responses/RateLimited" }
+        "502": { $ref: "#/components/responses/Upstream" }
+        "503": { $ref: "#/components/responses/BudgetExceeded" }
+
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      description: 'Your API key. The header "X-API-Key: <key>" is also accepted.'
+
+  parameters:
+    detail:
+      name: detail
+      in: query
+      required: false
+      schema: { type: string, enum: ["1", "true"] }
+      description: Return every stored field instead of the short response
+
+  schemas:
+    LinkVerification:
+      type: object
+      properties:
+        url: { type: string }
+        product: { type: string }
+        cause: { type: string }
+        verdict:
+          type: string
+          enum: [verified, weak_support, unrelated, contradicts_claim, unreachable]
+        support_strength: { type: integer, minimum: 0, maximum: 100, description: How strongly this page backs this product + this cause }
+        credibility: { type: integer, minimum: 0, maximum: 100, description: How much the source itself is worth }
+        summary: { type: string, description: "One neutral sentence; for unreachable, why the page could not be read" }
+        evidence: { type: array, items: { type: string }, maxItems: 3, description: Quotes verified to appear on the page }
+        checked_at: { type: string, format: date-time }
+        served_from: { type: string, enum: [live, cache] }
+
+    Source:
+      type: object
+      description: A search result that is about a boycott of this brand. Current ones come first.
+      properties:
+        title: { type: string }
+        url: { type: string }
+        date: { type: string, nullable: true }
+        timing: { type: string, enum: [current, past, unclear] }
+
+    BrandStatus:
+      type: object
+      properties:
+        brand: { type: string }
+        status: { type: string, enum: [active_boycott, no_evidence, unclear] }
+        confidence: { type: integer, minimum: 0, maximum: 100, description: "Confidence that an active boycott exists, not the share of people boycotting. Bands match status: no_evidence 0-10, unclear 0-45, active_boycott 50-100." }
+        reason: { type: string }
+        sources: { type: array, items: { $ref: "#/components/schemas/Source" } }
+        checked_at: { type: string, format: date-time }
+        served_from: { type: string, enum: [live, cache] }
+
+    BrandReport:
+      type: object
+      properties:
+        brand: { type: string }
+        status: { type: string, enum: [active_boycott, no_evidence, unclear] }
+        confidence: { type: integer }
+        reason: { type: string }
+        evidence_score: { type: integer, minimum: 0, maximum: 100, description: How well the sources hold up once audited }
+        sources_checked: { type: integer }
+        sources_verified: { type: integer }
+        sources:
+          type: array
+          items:
+            type: object
+            properties:
+              url: { type: string }
+              title: { type: string }
+              verdict: { type: string, enum: [verified, weak_support, unrelated, contradicts_claim, unreachable] }
+              support_strength: { type: integer }
+              credibility: { type: integer }
+              error: { type: string, description: Present only if this source could not be audited }
+        checked_at: { type: string, format: date-time }
+
+    BudgetLine:
+      type: object
+      properties:
+        used: { type: integer }
+        limit: { type: integer }
+        remaining: { type: integer }
+
+    Error:
+      type: object
+      properties:
+        error: { type: string }
+        type: { type: string, enum: [BadRequest, Unauthorized, NotFound, RateLimited, UpstreamError, BudgetExceeded, InternalError] }
+
+  responses:
+    BadRequest:
+      description: Invalid request (missing field, invalid URL, invalid JSON)
+      content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } }
+    Unauthorized:
+      description: Missing or invalid API key
+      content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } }
+    RateLimited:
+      description: Usage limit reached
+      headers:
+        Retry-After: { schema: { type: integer }, description: Seconds to wait }
+      content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } }
+    Upstream:
+      description: Search service or language model temporarily unavailable; retry later
+      content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } }
+    BudgetExceeded:
+      description: "The shared daily research budget is used up. Already-checked brands and links still answer; new checks resume after midnight UTC."
+      headers:
+        Retry-After: { schema: { type: integer }, description: Seconds until the budget resets }
+      content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } }

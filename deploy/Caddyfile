@@ -1,0 +1,12 @@
+{$DOMAIN} {
+	encode gzip
+
+	# No response timeout on purpose: a brand report with 8 sources can take a few minutes.
+	reverse_proxy api:3000
+
+	header {
+		Strict-Transport-Security "max-age=31536000"
+		X-Content-Type-Options "nosniff"
+		-Server
+	}
+}

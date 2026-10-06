@@ -1,0 +1,248 @@
+{
+  "name": "Boycott Agent — Brand Report API (POST /brand-report)",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "brand-report",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "id": "r-webhook",
+      "name": "Webhook (POST /brand-report)",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [
+        -820,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "const body = $input.first().json.body || $input.first().json;\nconst brand = (body.brand || '').toString().trim();\nif (!brand) throw new Error('Missing \"brand\". Send JSON: { \"brand\": \"Nike\" }');\n\n// How many of the returned sources to actually audit. Each one costs a Tavily\n// extract + an LLM call, so keep it small on a free tier.\nlet max_sources = parseInt(body.max_sources, 10);\nif (!Number.isFinite(max_sources) || max_sources < 1) max_sources = 3;\nmax_sources = Math.min(max_sources, 8);\n\nreturn [{ json: { brand, max_sources } }];"
+      },
+      "id": "r-normalize",
+      "name": "Normalize Input",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -600,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $env.N8N_INTERNAL_URL || 'http://localhost:5678' }}/webhook/boycott-check",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ brand: $json.brand, detail: true }) }}",
+        "options": {
+          "timeout": 120000
+        }
+      },
+      "id": "r-call-brand",
+      "name": "Call /boycott-check",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        -380,
+        300
+      ],
+      "notes": "Calls Agent 1 over its own webhook. That workflow must be ACTIVE."
+    },
+    {
+      "parameters": {
+        "jsCode": "// Turn the brand's sources into one item per link to audit.\nconst cfg = $('Normalize Input').first().json;\nconst brand = $input.first().json;\nconst sources = Array.isArray(brand.sources) ? brand.sources : [];\n\n// The cause we ask the verifier about is the reason Agent 1 reported. If it found\n// nothing, fall back to a generic phrasing so the verifier still has something concrete.\nconst cause = (brand.reason && brand.reason.trim())\n  ? brand.reason.trim().slice(0, 300)\n  : `consumer boycott of ${brand.brand}`;\n\nconst picked = sources.filter(s => s && s.url).slice(0, cfg.max_sources);\nif (picked.length === 0) return [{ json: { __none: true } }];\n\nreturn picked.map(s => ({ json: { url: s.url, title: s.title || '', product: brand.brand, cause } }));"
+      },
+      "id": "r-explode",
+      "name": "Explode Sources",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -160,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "typeValidation": "loose",
+            "version": 2
+          },
+          "combinator": "and",
+          "conditions": [
+            {
+              "id": "r-cond-any",
+              "leftValue": "={{ $json.__none }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "notTrue",
+                "singleValue": true
+              }
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "r-if-any",
+      "name": "Any Sources?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        60,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $env.N8N_INTERNAL_URL || 'http://localhost:5678' }}/webhook/verify-link",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ url: $json.url, product: $json.product, cause: $json.cause }) }}",
+        "options": {
+          "timeout": 180000,
+          "batching": {
+            "batch": {
+              "batchSize": 1,
+              "batchInterval": 1500
+            }
+          }
+        }
+      },
+      "id": "r-call-verify",
+      "name": "Verify Each Source",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        280,
+        200
+      ],
+      "alwaysOutputData": true,
+      "onError": "continueRegularOutput",
+      "notes": "Runs once per source. Agent 2 must be ACTIVE. Failures pass through so one bad link cannot sink the report."
+    },
+    {
+      "parameters": {
+        "jsCode": "// Combine the brand verdict with the per-source audits into one report.\nconst brand = $('Call /boycott-check').first().json;\nconst audits = $input.all().map(i => i.json).filter(j => j && !j.__none && j.url);\n\nconst sources = audits.map(a => ({\n  url: a.url,\n  verdict: a.verdict || 'unreachable',\n  support_strength: Number(a.support_strength) || 0,\n  credibility: Number(a.credibility) || 0,\n}));\n\n// Evidence score = deterministic, same principle as everywhere else in this project.\n// A source is only worth as much as (how well it backs the claim) x (how trustworthy it is).\nconst quality = sources\n  .map(s => (s.support_strength * s.credibility) / 100)\n  .sort((a, b) => b - a)\n  .slice(0, 3);\nconst evidence_score = quality.length\n  ? Math.round(quality.reduce((a, b) => a + b, 0) / quality.length)\n  : 0;\n\nconst sources_verified = sources.filter(s => s.verdict === 'verified').length;\n\nreturn [{ json: {\n  brand: brand.brand,\n  status: brand.status,\n  confidence: brand.confidence,      // does a boycott appear to exist?\n  reason: brand.reason || '',\n  evidence_score,                    // do the sources actually hold up? 0-100\n  sources_checked: sources.length,\n  sources_verified,\n  sources,\n  checked_at: new Date().toISOString(),\n} }];"
+      },
+      "id": "r-assemble",
+      "name": "Assemble Report",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        500,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ JSON.stringify($json) }}",
+        "options": {}
+      },
+      "id": "r-respond",
+      "name": "Respond",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.2,
+      "position": [
+        720,
+        300
+      ]
+    }
+  ],
+  "connections": {
+    "Webhook (POST /brand-report)": {
+      "main": [
+        [
+          {
+            "node": "Normalize Input",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Normalize Input": {
+      "main": [
+        [
+          {
+            "node": "Call /boycott-check",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Call /boycott-check": {
+      "main": [
+        [
+          {
+            "node": "Explode Sources",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Explode Sources": {
+      "main": [
+        [
+          {
+            "node": "Any Sources?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Any Sources?": {
+      "main": [
+        [
+          {
+            "node": "Verify Each Source",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Assemble Report",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Verify Each Source": {
+      "main": [
+        [
+          {
+            "node": "Assemble Report",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Assemble Report": {
+      "main": [
+        [
+          {
+            "node": "Respond",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "active": false
+}

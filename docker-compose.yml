@@ -1,0 +1,85 @@
+# Start everything:   docker compose up -d --build
+# The API answers on http://localhost:3000 (same requests as the Postman collection).
+
+services:
+  # --- Postgres = the app database (stores brand_boycott_status) ---
+  postgres:
+    image: postgres:16
+    container_name: boycott-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: ${POSTGRES_DB}
+    ports:
+      # host 5433 -> container 5432 (5432 is taken by another project). Bound to 127.0.0.1
+      # so only this PC can reach the database, not other machines on the network.
+      - "127.0.0.1:5433:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      # These run automatically the FIRST time the DB is created, in numeric order:
+      - ./schema.sql:/docker-entrypoint-initdb.d/01-schema.sql:ro
+      - ./schema-verifier.sql:/docker-entrypoint-initdb.d/02-schema-verifier.sql:ro
+      - ./schema-budget.sql:/docker-entrypoint-initdb.d/03-schema-budget.sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER} -d ${POSTGRES_DB}"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  # --- api = the Boycott Agent REST API (server/) ---
+  api:
+    build:
+      context: .
+      dockerfile: server/Dockerfile
+    container_name: boycott-api
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      # Inside Docker the database is reached by service name on its internal port.
+      PGHOST: postgres
+      PGPORT: "5432"
+      PORT: "3000"
+    ports:
+      - "3000:3000"
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  # --- n8n = the original visual version, kept for reference ---
+  # Not started by default. Run it with:  docker compose --profile n8n up -d
+  # These workflows predate the Node server's fixes (page cleaning, passages,
+  # model fallback), so their answers can differ from the API's.
+  n8n:
+    profiles: ["n8n"]
+    image: n8nio/n8n:latest
+    container_name: boycott-n8n
+    restart: unless-stopped
+    ports:
+      - "5679:5678"                       # host 5679 -> container 5678 (5678 used by another n8n project)
+    environment:
+      # Let workflow expressions read env vars ( $env.TAVILY_API_KEY etc. )
+      N8N_BLOCK_ENV_ACCESS_IN_NODE: "false"
+      GENERIC_TIMEZONE: "Africa/Tunis"
+      N8N_SECURE_COOKIE: "false"           # allows http://localhost access without HTTPS
+      WEBHOOK_URL: "http://localhost:5679/" # so webhook URLs shown in the UI use the right host port
+      # Let a browser page (any origin) call the /webhook/* endpoints. Fine for local
+      # development. In production, replace "*" with your site's origin.
+      N8N_CORS_ALLOW_ORIGIN: "*"
+      # How n8n reaches ITSELF from inside the container (used by /brand-report to call
+      # the other two endpoints). Container port, not the host port.
+      N8N_INTERNAL_URL: "http://localhost:5678"
+      # --- keys used by the workflows ---
+      TAVILY_API_KEY: ${TAVILY_API_KEY}
+      LLM_BASE_URL: ${LLM_BASE_URL}
+      LLM_API_KEY: ${LLM_API_KEY}
+      LLM_MODEL: ${LLM_MODEL}
+    volumes:
+      - n8n_data:/home/node/.n8n
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+volumes:
+  postgres_data:
+  n8n_data:

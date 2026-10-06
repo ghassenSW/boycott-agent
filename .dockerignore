@@ -1,0 +1,12 @@
+# Secrets reach the container through env_file in docker-compose.yml, never through the image.
+.env
+**/.env
+
+**/node_modules
+server/eval
+postgres_data
+n8n_data
+demo
+postman
+*.md
+workflow-*.json
