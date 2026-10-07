@@ -1,264 +1,343 @@
-# Boycott Agent
+# Boycott Agent API
 
-> **Start here.** The product is the Dockerized REST API:
->
-> - Run it: `docker compose up -d --build`, then http://localhost:3000 (key required, see `.env`).
-> - **[`API.md`](API.md)**: integration guide for website developers (+ [`openapi.yaml`](openapi.yaml)).
-> - **[`DEPLOY.md`](DEPLOY.md)**: putting it on a server with HTTPS.
-> - **[`server/README.md`](server/README.md)**: how it works inside, configuration, the answer key.
->
-> The n8n workflows (the JSON files here) are the **original visual version**, kept for reference.
-> They predate the API's fixes (page cleaning, passages, model fallback, keys), so the sections below
-> that mention `/webhook/...` or port 5679 describe that older version.
+A small service that answers two questions from **live web sources**:
 
+1. **Is this brand being boycotted right now, and why?** (with the articles it found)
+2. **Does this web page really support "boycott X because of Y"?** (with quotes taken from the page)
 
+It runs in Docker next to your website, on the same server. Your website's server calls it; visitors
+never talk to it directly. Answers are in English.
 
-An AI agent that takes a **brand name** (e.g. "Coca-Cola", "Nike") and returns a **grounded, sourced
-assessment** of whether it currently faces a consumer boycott — with a **confidence score (0–100)** and
-**reference links**. Everything is grounded in a live web search (Tavily); nothing is invented from the
-model's memory.
-
-## What it outputs
-
-```json
-{
-  "brand": "Nike",
-  "status": "active_boycott",          // active_boycott | no_evidence | unclear
-  "confidence": 78,                     // Option A: confidence that an active boycott EXISTS (not a survey %)
-  "reason": "Consumer campaigns over ...",
-  "sources": [
-    { "title": "...", "url": "https://...", "date": "2026-06-30" }
-  ],
-  "checked_at": "2026-07-10T09:00:00.000Z",
-  "served_from": "live"                 // or "cache"
-}
+```
+ Visitor's browser ──► your Next.js site ──► Boycott API (127.0.0.1:3100, on the same server)
+                      /api/boycott/check     checks the web, answers in JSON
+                      (holds the secret key)
 ```
 
-Send `"detail": true` to also get `who_is_calling`, `recency`, `notes` and `brand_normalized`.
-Every field is always stored in Postgres regardless — the trimming is only on the response.
-
-## Architecture
-
-Two workflows share one Postgres table.
-
-**Workflow 1 — Live Lookup API** (`workflow-1-live-lookup.json`)
-```
-POST /boycott-check {brand}
-  → Normalize Input        (lowercase/trim, build search query)
-  → Cache Lookup (Postgres) (is this brand already known?)
-  → Evaluate Cache          (fresh if checked < 7 days ago?)
-  → IF fresh ──► Respond (cached)          ← fast path, no API cost
-        else ─► Tavily Search              (live web results — the "eyes")
-              → Build LLM Context          (grounding prompt + count sources / recency)
-              → LLM Judge                  (reads results → status/reason JSON — the "brain")
-              → Compute Score & Assemble   (confidence computed in CODE, not by the model)
-              → Upsert Status (Postgres)   (cache the result + build history)
-              → Respond (live)
-```
-
-**Workflow 2 — Daily Refresher** (`workflow-2-refresher.json`)
-```
-Every day @ 03:00
-  → Select Stale Brands (Postgres, last_checked > 1 day, oldest first, 50/run)
-  → Loop Over Brands
-       → Build Query → Tavily → Build Context → LLM → Score → Upsert  (same logic)
-       ↺ next brand
-```
-The refresher only re-checks brands **already in the table**. New brands enter the table automatically the
-first time someone queries them via the API. So the two workflows feed each other.
-
-## Why the score is trustworthy
-
-The **LLM decides `status` and `reason`** (qualitative judgement).
-The **confidence number is computed in a Code node** from real signals — how many sources came back and how
-recent they are — using a fixed formula. The model never picks the number, so it's reproducible and can't be
-hallucinated. Tune the weights in the `Compute Score & Assemble` node.
+**Contents:** [1. Install](#1-install-on-the-server-10-minutes) ·
+[2. Add it to the website](#2-add-it-to-the-website-nextjs) ·
+[3. Inputs and outputs](#3-inputs-and-outputs) · [4. Errors](#4-errors) ·
+[5. Limits](#5-limits-speed-and-daily-budget) · [6. Day-to-day](#6-day-to-day-commands)
 
 ---
 
-## Setup
+## 1. Install on the server (10 minutes)
 
-### 1. Database
-Run [`schema.sql`](schema.sql) against your Postgres once.
+**You need:** Linux with Docker and the Docker Compose plugin
+([install guide](https://docs.docker.com/engine/install/)). At rest it uses about 60 MB of RAM in total,
+and each of its two containers is capped at 1 CPU and 512 MB, so it can't slow down your site. **Nothing is opened to the internet**,
+and nothing on ports 80/443 changes.
 
-### 2. n8n credentials
-- **Postgres credential** → select it on every Postgres node (Cache Lookup, Upsert, Select Stale Brands).
+**You also need two keys** (Tavily and Gemini): ask Ghassen, he'll send them privately.
 
-### 3. Environment variables (set in n8n, then restart)
-| Variable | Example | What it is |
-|---|---|---|
-| `TAVILY_API_KEY` | `tvly-xxxx` | Tavily key — free tier at tavily.com |
-| `LLM_BASE_URL` | `https://api.openai.com/v1` | OpenAI-compatible base URL of your provider |
-| `LLM_API_KEY` | `sk-xxxx` | Your LLM **API** key (not a chat-app subscription) |
-| `LLM_MODEL` | `gpt-4o-mini` | Model id at that provider |
-
-> The LLM call is a generic **OpenAI-compatible** `/chat/completions` request, so it works with OpenAI,
-> OpenRouter (`https://openrouter.ai/api/v1`), Groq, Together, Mistral, or a local Ollama/LM Studio
-> (`http://localhost:11434/v1`). Just point the three `LLM_*` vars at your provider.
-> If your provider is **not** OpenAI-compatible (e.g. raw Gemini or Anthropic), tell me and I'll swap the
-> `LLM Judge` node for the right one.
-
-### 4. Import
-In n8n: **Import from File** → pick `workflow-1-live-lookup.json`, then `workflow-2-refresher.json`.
-Assign the Postgres credential on the Postgres nodes. Activate both.
-
-### 5. Test the API
 ```bash
-curl -X POST https://YOUR-N8N/webhook/boycott-check \
-  -H "Content-Type: application/json" \
-  -d '{"brand":"Nike"}'
+git clone https://github.com/ghassenSW/boycott-agent.git
+cd boycott-agent
+bash deploy/setup.sh
+```
+
+The script:
+1. checks Docker;
+2. asks you to paste the two keys (they're written only to `.env` on the server, never to GitHub);
+3. generates a database password and a **website key**;
+4. builds and starts everything, then tests it.
+
+At the end it prints what your website needs:
+
+```
+  The API answers on this server at:   http://127.0.0.1:3100
+  Website key:                         Xy3k... (40 characters)
+
+  In the website's .env.local (Next.js), add:
+      BOYCOTT_API_URL=http://127.0.0.1:3100
+      BOYCOTT_API_KEY=Xy3k...
+```
+
+Port 3100 already taken? Run `API_PORT=3200 bash deploy/setup.sh` instead.
+
+Check it yourself at any time:
+
+```bash
+curl http://127.0.0.1:3100/health        # {"ok":true,...}
+```
+
+It restarts on its own after a reboot.
+
+---
+
+## 2. Add it to the website (Next.js)
+
+Ready-made files are in [`examples/nextjs/`](examples/nextjs). Copy them into your project, keeping
+the same paths (under `src/` if your project uses a `src` folder). They import each other with the
+`@/` alias that `create-next-app` sets up by default.
+
+| File | What it does |
+|---|---|
+| `lib/boycott.ts` | Talks to the API (server side only), with TypeScript types for every answer |
+| `app/api/boycott/check/route.ts` | Your route `POST /api/boycott/check` → brand check |
+| `app/api/boycott/verify/route.ts` | Your route `POST /api/boycott/verify` → link check |
+| `components/BoycottChecker.tsx` | A search box that shows the result (unstyled, restyle it freely) |
+
+Then:
+
+1. Add the two lines printed by the setup script to `.env.local` (see `.env.local.example`).
+2. Put the component on any page:
+
+   ```tsx
+   import BoycottChecker from '@/components/BoycottChecker';
+
+   export default function Page() {
+     return <BoycottChecker />;
+   }
+   ```
+
+3. Restart your site. Type a brand, click **Check**.
+
+These files are tested: built with Next.js 16 in strict TypeScript, and run against this API. The
+key never reaches the browser (it's not in any file Next.js sends to visitors).
+
+**Using it somewhere else in your code** (a server component, a server action, a cron job):
+
+```ts
+import { checkBrand, verifyLink } from '@/lib/boycott';
+
+const result = await checkBrand('Adidas');            // see section 3 for what you get
+const link = await verifyLink(url, 'Adidas', 'its advertising campaign');
+```
+
+**If your website runs in Docker** (not directly on the server), `127.0.0.1` inside its container
+means the container itself. Instead, join the API's Docker network and use its name. In your site's
+`docker-compose.yml`:
+
+```yaml
+services:
+  your-website:
+    # ...your existing settings...
+    environment:
+      BOYCOTT_API_URL: http://boycott-api:3000
+      BOYCOTT_API_KEY: ${BOYCOTT_API_KEY}
+    networks: [default, boycott-net]
+
+networks:
+  boycott-net:
+    external: true
 ```
 
 ---
 
-# Agent 2 — Link Verifier (source auditor)
+## 3. Inputs and outputs
 
-Where Agent 1 **finds** sources, Agent 2 **audits one**. You give it a link plus the claim it is supposed
-to back up, and it reports whether that link actually supports it — and how much the source is worth.
+Every call is a `POST` with a JSON body and the header `Authorization: Bearer <website key>`.
+The `lib/boycott.ts` file does this for you. The examples below are **real answers** from this API.
 
-**Input**
-```json
-{ "url": "https://example.com/article", "product": "Starbucks", "cause": "perceived political stance on the Gaza war" }
-```
+### Brand check: is this brand being boycotted?
 
-**Output**
+`POST /v1/boycott-check`
+
+**You send:**
+
+| Field | Required | Example |
+|---|---|---|
+| `brand` | yes | `"Adidas"`. Spelling doesn't matter: "McDonald's" = "McDonalds" = "mcdonalds" |
+
+**You get back:**
+
 ```json
 {
-  "url": "https://example.com/article",
-  "product": "Starbucks",
-  "cause": "perceived political stance on the Gaza war",
-  "verdict": "verified",            // verified | weak_support | unrelated | contradicts_claim | unreachable
-  "support_strength": 85,           // 0-100: how strongly THIS page backs THIS product + THIS cause
-  "credibility": 62,                // 0-100: hybrid score for the source itself
-  "summary": "One neutral sentence about what the page says.",
-  "evidence": ["short verbatim quote from the page"],
-  "checked_at": "2026-07-26T09:00:00.000Z",
+  "brand": "Adidas",
+  "status": "active_boycott",
+  "confidence": 100,
+  "reason": "Adidas is facing calls for a boycott due to an advertising campaign and promotion for its single-shoe service that featured a former Israeli soldier who lost his leg while serving in the military.",
+  "sources": [
+    {
+      "title": "Adidas faces boycott calls over promotion featuring ex-IDF soldier who lost leg in 2021",
+      "url": "https://www.timesofisrael.com/adidas-faces-boycott-over-promotion-featuring-ex-idf-soldier-who-lost-leg-in-2021",
+      "date": "Sun, 06 Sep 2026 08:42:15 GMT",
+      "timing": "current"
+    },
+    {
+      "title": "Adidas faces global boycott calls for campaign featuring former Israeli soldier",
+      "url": "https://www.aa.com.tr/en/world/adidas-faces-global-boycott-calls-for-campaign-featuring-former-israeli-soldier/4051406",
+      "date": "Tue, 08 Sep 2026 22:43:00 GMT",
+      "timing": "current"
+    }
+  ],
+  "checked_at": "2026-10-07T02:25:29.438Z",
   "served_from": "live"
 }
 ```
 
-Send `"detail": true` for the full 23-field record — `credibility_base` / `credibility_adjust` /
-`credibility_reason`, `mentions_product`, `mentions_cause`, `content_type`, `evidence_dropped`,
-`domain`, `content_length`, `available`, `availability_note`, `notes`. All of it is written to
-Postgres on every run whether you ask for it or not, so nothing is lost by keeping responses slim.
+**How to read it:**
 
-### Pipeline
-```
-Input {url, product, cause}
-  → Normalize Input        (validate the URL, build the cache key)
-  → Cache Lookup           (seen this exact url+product+cause before?)
-  → Fresh? ──yes→ Cached Result                       ← 30-day window, pages rarely change
-        └──no → Tavily Extract      (pull the page's readable text)
-              → Check Availability  (real content? + deterministic credibility base)
-              → Available? ──no→ Unavailable Result   ← honest "unreachable", not a fake verdict
-                          └─yes→ Build LLM Context    (grounded strictly on this page's text)
-                                → LLM Verifier        (supports / partial / unrelated / contradicts)
-                                → Score & Assemble    (validate quotes, compute both scores)
-                                → Upsert Verification (Postgres)
-                                → Result
-```
-
-### Three things that make the verdict trustworthy
-
-1. **Quotes are verified against the page.** Every evidence quote the model returns is checked to exist
-   verbatim in the extracted text. Invented quotes are dropped and counted in `evidence_dropped`.
-2. **The product AND the cause must both be present.** A page about the right brand but the *wrong* cause
-   gets capped at 35 support strength; a page that never mentions the brand is capped at 10. This is the
-   whole point of the agent — it stops a vaguely-related link from being treated as proof.
-3. **Credibility is anchored, not vibes.** A deterministic base (max 70) comes from domain tier, author,
-   date, HTTPS and length. The model may only adjust it by ±15. So a page cannot talk its way to a high
-   score, and the two components are reported separately for transparency.
-
-### Files
-| File | Purpose |
+| Field | Meaning |
 |---|---|
-| `schema-verifier.sql` | The `link_verifications` table (run once) |
-| `workflow-3-verify-link-TEST.json` | Manual version — type url/product/cause, click Execute |
-| `workflow-3-verify-link-API.json` | `POST /verify-link` REST endpoint |
-| `workflow-4-brand-report-API.json` | `POST /brand-report` — runs Agent 1, then Agent 2 on each source |
+| `status` | **`active_boycott`**: at least two independent news or campaign sites (not just social media) report a current boycott. **`unclear`**: some signs, but weak (e.g. only social-media posts). **`no_evidence`**: nothing current. Old boycotts that are over count as `no_evidence`. |
+| `confidence` | 0 to 100: how strong the evidence is that a boycott exists. Always in line with `status`: `no_evidence` 0–10, `unclear` up to 45, `active_boycott` 50–100. **Not** the share of people boycotting. |
+| `reason` | Why people are boycotting it now, in one or two sentences. Empty when nothing was found. |
+| `sources` | The articles the answer is based on, current ones first. `timing` is `current`, `past` or `unclear`. Can be empty. **Show them to visitors.** |
+| `checked_at` | When the web was checked. |
+| `served_from` | `live` (just checked) or `cache` (an answer from the last 7 days, instant and free). |
 
-### Test it
-```bash
-curl -X POST http://localhost:5679/webhook/verify-link \
-  -H "Content-Type: application/json" \
-  -d '{"url":"https://example.com/article","product":"Starbucks","cause":"political stance"}'
-```
+### Link check: does this page really support the claim?
 
-### Hooking it into Agent 1 later
-Agent 1 already returns a `sources[]` array. To auto-audit them, add an **Execute Workflow** node after
-`Compute Score & Assemble` that calls this verifier once per source, then keep only those with
-`verdict = "verified"`. The verifier was built standalone precisely so this stays a drop-in step.
+`POST /v1/verify-link`
 
----
+**You send:**
 
-# The REST API (all three agents, one surface)
+| Field | Required | Example |
+|---|---|---|
+| `url` | yes | `"https://www.aljazeera.com/sports/2026/9/6/adidas-faces-boycott-calls-over-campaign-featuring-former-israeli-soldier"` |
+| `product` | yes | `"Adidas"` |
+| `cause` | yes | `"advertising campaign featuring a former Israeli soldier"` |
 
-Everything is reachable over plain HTTP on the same n8n instance. Import all three workflows and
-**activate** them — a webhook only answers on `/webhook/...` while its workflow is active.
-
-| Method | Path | Body | What you get |
-|---|---|---|---|
-| POST | `/webhook/boycott-check` | `{ "brand": "Nike" }` | Is this brand boycotted? (Agent 1) |
-| POST | `/webhook/verify-link` | `{ "url": "...", "product": "...", "cause": "..." }` | Does this one link hold up? (Agent 2) |
-| POST | `/webhook/brand-report` | `{ "brand": "Nike", "max_sources": 3 }` | Agent 1 **plus** Agent 2 run on each of its sources |
-
-Base URL locally: `http://localhost:5679`. Add `"detail": true` to any body (or `?detail=1`) for the
-full record instead of the slim one.
-
-### `/brand-report` — the combined endpoint
-
-This is "all of it in one call". It runs Agent 1, takes the sources Agent 1 returned, and pushes each
-one through Agent 2 — so you learn both *whether a boycott exists* and *whether the evidence for it
-survives auditing*.
-
-```
-POST /webhook/brand-report {brand, max_sources}
-  → Call /boycott-check           (Agent 1, over its own webhook)
-  → Explode Sources               (one item per source URL, capped at max_sources)
-  → Any Sources? ──no──────────────┐
-        └─yes→ Verify Each Source  │  (Agent 2, once per link, 1 at a time / 1.5s apart)
-                     ↓             │
-              Assemble Report ◄────┘
-                     → Respond
-```
+**You get back:**
 
 ```json
 {
-  "brand": "Nike",
-  "status": "active_boycott",
-  "confidence": 78,          // does a boycott appear to exist?
-  "reason": "...",
-  "evidence_score": 61,      // do its sources actually hold up? 0-100
-  "sources_checked": 3,
-  "sources_verified": 2,
-  "sources": [
-    { "url": "https://...", "verdict": "verified", "support_strength": 85, "credibility": 62 }
+  "url": "https://www.aljazeera.com/sports/2026/9/6/adidas-faces-boycott-calls-over-campaign-featuring-former-israeli-soldier",
+  "product": "Adidas",
+  "cause": "advertising campaign featuring a former Israeli soldier",
+  "verdict": "verified",
+  "support_strength": 90,
+  "credibility": 59,
+  "summary": "The article reports that Adidas is facing calls for a boycott due to an advertising campaign featuring a former Israeli soldier.",
+  "evidence": [
+    "Adidas faces boycott calls over campaign featuring former Israeli soldier",
+    "Sportswear giant Adidas has faced criticism and calls for a boycott for featuring a former Israeli army soldier"
   ],
-  "checked_at": "2026-07-26T09:00:00.000Z"
+  "checked_at": "2026-10-07T02:26:33.048Z",
+  "served_from": "live"
 }
 ```
 
-`evidence_score` is computed in code, never by the model: each source is worth
-`support_strength × credibility ÷ 100`, and the score is the mean of the best three. A brand can
-therefore come back with **high confidence but a low evidence score** — lots of chatter, nothing
-that survives an audit. That gap is the most useful thing the API tells you.
+Same page, but with a cause it doesn't talk about (`"cause": "child labour in its factories"`):
 
-**Costs:** one `/brand-report` call = 1 Tavily search + 1 LLM call (Agent 1) + up to `max_sources` ×
-(1 Tavily extract + 1 LLM call). Default cap is 3, max 8. Both sub-agents cache, so repeat calls are
-mostly free.
-
-**Before exposing the n8n version publicly:** it has no auth. (The Node API has keys; see `API.md`.) Add an API-key check as the first node of each
-webhook, or put n8n behind a reverse proxy that requires a header.
-
-```bash
-curl -X POST http://localhost:5679/webhook/brand-report -H "Content-Type: application/json" -d '{"brand":"Nike","max_sources":3}'
+```json
+{
+  "verdict": "unrelated",
+  "support_strength": 5,
+  "credibility": 59,
+  "summary": "The page reports on boycott calls against Adidas due to an advertising campaign featuring a former Israeli soldier, not because of child labour in its factories."
+}
 ```
+
+**How to read it:**
+
+| Field | Meaning |
+|---|---|
+| `verdict` | **`verified`**: the page clearly links this product to this cause. **`weak_support`**: it does, but weakly or in passing. **`unrelated`**: it doesn't (including a page about a boycott for a *different* reason). **`contradicts_claim`**: the page says the claim is false (e.g. a company denial). **`unreachable`**: the page couldn't be read (dead link, paywall, blocked site). That says nothing about the claim itself. |
+| `support_strength` | 0 to 100: how strongly **this page** supports **this product + this cause**. |
+| `credibility` | 0 to 100: how trustworthy the **source** is (type of site, author, date…). Doesn't depend on the claim. |
+| `summary` | One neutral sentence about what the page says. For `unreachable`, why it couldn't be read. |
+| `evidence` | Up to 3 quotes, checked to appear **word for word** on the page. |
+
+Pages in English, French and Arabic work.
+
+### Brand report: both at once (slow)
+
+`POST /v1/brand-report` with `{ "brand": "Adidas", "max_sources": 2 }` (`max_sources`: 1 to 8, default 3).
+
+It runs the brand check, then checks each source like a link check:
+
+```json
+{
+  "brand": "Adidas",
+  "status": "active_boycott",
+  "confidence": 100,
+  "reason": "Adidas is facing calls for a boycott due to an advertising campaign...",
+  "evidence_score": 42,
+  "sources_checked": 2,
+  "sources_verified": 2,
+  "sources": [
+    { "url": "https://www.timesofisrael.com/...", "title": "Adidas faces boycott calls over promotion featuring ex-IDF soldier who lost leg in 2021",
+      "verdict": "verified", "support_strength": 90, "credibility": 55 },
+    { "url": "https://www.aa.com.tr/...", "title": "Adidas faces global boycott calls for campaign featuring former Israeli soldier",
+      "verdict": "verified", "support_strength": 90, "credibility": 39 }
+  ],
+  "checked_at": "2026-10-07T02:26:44.023Z"
+}
+```
+
+`evidence_score` (0–100) says how well the sources hold up once checked one by one. It costs more of
+the daily budget (section 5), so it's better suited to an admin page than to a public search box.
+
+### Extra detail
+
+Add `"detail": true` to any request body to get every stored field (how each score was built,
+rejected quotes, etc.). The full reference is in [`API.md`](API.md), and in machine-readable form in
+[`openapi.yaml`](openapi.yaml).
 
 ---
 
-## Things you can tune / decide later
-- **Freshness window** (currently 7 days) in `Evaluate Cache`.
-- **Score weights** in `Compute Score & Assemble`.
-- **Search query wording** in `Normalize Input` / `Build Query` (e.g. add language or region).
-- **Refresh volume/cadence** in the schedule + `LIMIT 50`.
-- Add **rate limiting / an API key check** on the webhook before exposing it publicly.
+## 4. Errors
+
+Every error has the same shape:
+
+```json
+{ "error": "\"url\" does not look like a valid URL (expected http://… or https://…): not-a-link", "type": "BadRequest" }
+```
+
+| HTTP | `type` | Meaning | What to show visitors |
+|---|---|---|---|
+| 400 | `BadRequest` | A field is missing or invalid | The `error` message |
+| 401 | `Unauthorized` | Wrong or missing website key | (your config: check `.env.local`) |
+| 429 | `RateLimited` | Too many requests for this key in a minute or a day | "Busy, try again in a minute" |
+| 502 | `UpstreamError` | The search or AI service is temporarily overloaded | "Busy, try again in a minute" |
+| 503 | `BudgetExceeded` | The shared daily budget is used up (section 5) | "New checks resume tomorrow" |
+
+`friendlyMessage()` in `lib/boycott.ts` already turns each of these into a sentence for visitors.
+Never show an error as if it were a result about the brand.
+
+---
+
+## 5. Limits, speed and daily budget
+
+| | |
+|---|---|
+| Speed | 5–30 s the first time a brand or link is checked (it searches the web); **instant afterwards** (cached 7 days for brands, 30 days for links). The very first request after a restart can take up to a minute. Your code should wait at least **120 s**. |
+| Daily budget | The free plans behind it allow about **15 new brands or 30 new links per day**, shared by everyone. Cached answers cost nothing. When it's used up, new checks get `503` until midnight UTC (1 a.m. in Tunisia), and everything already checked keeps working. |
+| Per key | 20 units per minute and 300 per day (a check = 1 unit, a brand report = 1 + `max_sources`). |
+
+See what's left today:
+
+```bash
+curl -H "Authorization: Bearer <website key>" http://127.0.0.1:3100/v1/usage
+```
+
+All limits are in `.env` (`TAVILY_DAILY_CREDITS`, `RATE_LIMIT_PER_MINUTE`, ...). After editing it, run
+`docker compose up -d` to apply.
+
+---
+
+## 6. Day-to-day commands
+
+Run them in the `boycott-agent` folder.
+
+| Task | Command |
+|---|---|
+| Status | `docker compose ps` |
+| Live logs (one line per request) | `docker compose logs -f api` |
+| Update to the latest version | `git pull && docker compose up -d --build` |
+| Apply a change made in `.env` | `docker compose up -d` (`restart` does **not** reload `.env`) |
+| Restart | `docker compose restart api` |
+| Stop / start | `docker compose down` / `docker compose up -d` (data is kept) |
+| Back up the database now | `bash deploy/backup.sh` (saved in `backups/`, keeps 7 days) |
+| Back up every night at 3:00 | `crontab -e`, then add: `0 3 * * * bash /full/path/to/boycott-agent/deploy/backup.sh >> /full/path/to/boycott-agent/backups/backup.log 2>&1` |
+| Give another website access | Add `,othersite:<new key>` to `API_KEYS` in `.env`, then `docker compose up -d`. New key: `head -c 2048 /dev/urandom \| tr -dc A-Za-z0-9 \| cut -c1-40` |
+
+Losing the database isn't serious: answers are simply recomputed on the next request.
+
+---
+
+## What's in this repository
+
+| Path | What it is |
+|---|---|
+| `server/` | The API itself (Node.js). How it works inside: [`server/README.md`](server/README.md) |
+| `deploy/` | `setup.sh` (installation) and `backup.sh` |
+| `docker-compose.yml` + `docker-compose.server.yml` | The Docker setup; `setup.sh` makes the server version the default |
+| `examples/nextjs/` | The files to copy into the website |
+| `API.md`, `openapi.yaml` | Full API reference |
+| `postman/` | A Postman collection to try every endpoint |
+| `DEPLOY-RENDER.md`, `DEPLOY.md` | Other ways to host it (free cloud, or a server of its own with HTTPS) |
+| `docs/original-design.md`, `workflow-*.json` | Project history: the original n8n version |

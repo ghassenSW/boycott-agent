@@ -1,0 +1,50 @@
+# Render Blueprint: Render reads this file to create the API service.
+# Guide: DEPLOY-RENDER.md. The database is on Neon (Render's free Postgres is deleted after 30 days).
+#
+# Values marked "sync: false" are secrets: Render asks for them when you create the
+# Blueprint, and they never live in this repository.
+
+services:
+  - type: web
+    name: boycott-agent
+    runtime: docker
+    plan: free
+    region: frankfurt            # closest Render region to Tunisia
+    dockerfilePath: ./server/Dockerfile
+    dockerContext: .
+    healthCheckPath: /ping       # must not touch the database, or Neon never pauses
+    autoDeployTrigger: commit    # every push to main redeploys
+    envVars:
+      # --- secrets (Render asks for these) ---
+      - key: DATABASE_URL        # Neon connection string, ends with ?sslmode=require
+        sync: false
+      - key: TAVILY_API_KEY
+        sync: false
+      - key: LLM_API_KEY
+        sync: false
+      - key: API_KEYS            # name:key pairs, one per website. Generate: cd server && npm run new-key
+        sync: false
+
+      # --- settings (safe to keep in the repository) ---
+      - key: LLM_BASE_URL
+        value: https://generativelanguage.googleapis.com/v1beta/openai
+      - key: LLM_MODEL
+        value: gemini-3.8-flash
+      - key: LLM_FALLBACK_MODELS
+        value: gemini-3.5-flash,gemini-flash-latest,gemini-3.5-flash-lite,gemini-flash-lite-latest
+      - key: LLM_MAX_CONCURRENCY
+        value: "2"
+      - key: TAVILY_SEARCH_DEPTH
+        value: advanced
+      - key: TAVILY_EXTRACT_DEPTH
+        value: basic
+      - key: TAVILY_DAILY_CREDITS
+        value: "30"
+      - key: TAVILY_MONTHLY_CREDITS
+        value: "950"
+      - key: LLM_DAILY_CALLS
+        value: "400"
+      - key: RATE_LIMIT_PER_MINUTE
+        value: "20"
+      - key: RATE_LIMIT_PER_DAY
+        value: "300"

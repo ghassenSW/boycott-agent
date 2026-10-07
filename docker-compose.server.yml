@@ -1,0 +1,44 @@
+# Server version, layered on top of docker-compose.yml.
+#
+# For a server that already hosts a website: the API is reachable ONLY from that server
+# (127.0.0.1), so the website's backend can call it while nothing is exposed to the
+# internet: no domain, no HTTPS, no change to the existing web server on ports 80/443.
+#
+# deploy/setup.sh puts this in .env, so plain "docker compose ..." commands use both files:
+#   COMPOSE_FILE=docker-compose.yml:docker-compose.server.yml
+
+x-logs: &logs
+  # Docker keeps container logs forever by default; cap them so they can't fill the disk.
+  logging:
+    driver: json-file
+    options:
+      max-size: "10m"
+      max-file: "3"
+
+services:
+  postgres:
+    <<: *logs
+    ports: !reset []   # the database is only reachable by the API, through Docker's internal network
+    deploy:
+      resources:
+        limits:
+          cpus: "1.0"
+          memory: 512M
+
+  api:
+    <<: *logs
+    ports: !override
+      # 127.0.0.1 = only programs on this server can call it. 3100 by default because
+      # Next.js usually takes 3000. Change API_PORT in .env if 3100 is taken too.
+      - "127.0.0.1:${API_PORT:-3100}:3000"
+    deploy:
+      resources:
+        limits:
+          cpus: "1.0"
+          memory: 512M
+
+# A fixed name, so a website running in its own Docker containers can join this network
+# and reach the API at http://boycott-api:3000 (see README, "If the website runs in Docker").
+networks:
+  default:
+    name: boycott-net

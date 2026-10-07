@@ -15,6 +15,21 @@ security:
   - bearerAuth: []
 
 paths:
+  /ping:
+    get:
+      operationId: ping
+      summary: Liveness only (never touches the database)
+      security: []
+      responses:
+        "200":
+          description: Up
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  ok: { type: boolean, example: true }
+
   /health:
     get:
       operationId: health

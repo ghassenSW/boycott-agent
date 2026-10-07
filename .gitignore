@@ -4,6 +4,7 @@
 # Local data
 postgres_data/
 n8n_data/
+backups/
 
 # Node server
 node_modules/

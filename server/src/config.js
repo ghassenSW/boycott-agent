@@ -35,7 +35,10 @@ export const config = {
   },
 
   db: {
-    connectionString: env.DATABASE_URL || undefined,
+    // Neon's addresses end in "sslmode=require". node-postgres treats that as full certificate
+    // verification today, but its next major version will weaken it to libpq's meaning
+    // (encrypted, server not verified). Pin the strong behaviour explicitly.
+    connectionString: env.DATABASE_URL ? env.DATABASE_URL.replace(/sslmode=require\b/, 'sslmode=verify-full') : undefined,
     host: env.PGHOST || 'localhost',
     // The Docker container publishes 5432 on host port 5433.
     port: Number(env.PGPORT || 5433),
@@ -59,6 +62,8 @@ export const config = {
     tavilyDaily: Number(env.TAVILY_DAILY_CREDITS || 30),
     tavilyMonthly: Number(env.TAVILY_MONTHLY_CREDITS || 950), // free plan: 1000, minus a margin
     llmDaily: Number(env.LLM_DAILY_CALLS || 400),
+    // How often the monthly Tavily count is checked against Tavily's own figure.
+    syncMinutes: Number(env.BUDGET_SYNC_MINUTES || 60),
   },
 
   llm: {

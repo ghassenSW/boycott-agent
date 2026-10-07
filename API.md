@@ -22,7 +22,7 @@ A machine-readable description of everything below is in [`openapi.yaml`](openap
 | Base URL | given to you with your key, e.g. `https://api.example.com` |
 | Format | JSON in, JSON out (`Content-Type: application/json`) |
 | Auth | `Authorization: Bearer <your-key>` on every `/v1/...` request |
-| Health | `GET /health` (no key needed) returns `{"ok": true}` |
+| Health | `GET /ping` (no key, instant) or `GET /health` (no key, also checks the database) |
 | Budget left today | `GET /v1/usage` (key needed, free), see section 4 |
 
 > **Call the API from your website's server, never from browser JavaScript.**
@@ -41,7 +41,8 @@ Answers come from live searches and a language model, so they take time:
 | `brand-report` | 10 s – 3 min (grows with `max_sources`) |
 
 Show a loading state in your interface, and use a client timeout of **at least 120 s**
-(240 s for `brand-report` with many sources).
+(240 s for `brand-report` with many sources). On the free hosting plan the API may be asleep
+after a quiet period; the first request then takes about a minute longer.
 
 ### Caching
 

@@ -20,7 +20,7 @@ app.use(express.json({ limit: '256kb' }));
 app.use((req, res, next) => {
   const t = Date.now();
   res.on('finish', () => {
-    if (req.path === '/health') return;
+    if (req.path === '/health' || req.path === '/ping') return;
     console.log(`${new Date().toISOString()} ${req.client ?? '-'} ${req.method} ${req.path} ${res.statusCode} ${Date.now() - t}ms`);
   });
   next();
@@ -81,7 +81,11 @@ for (const [path, handlers] of Object.entries(routes)) app.post(path, requireApi
 // What the shared budget has left today and this month. Free: costs no units.
 app.get('/v1/usage', requireApiKey, wrap(async (_req, res) => res.json(await usage())));
 
-// Public, no key: for uptime monitors and the Docker health check.
+// Public, no key, never touches the database: for the host's health check and for a
+// keep-awake pinger, so neither keeps a serverless database (Neon) from pausing.
+app.get('/ping', (_req, res) => res.json({ ok: true }));
+
+// Public, no key: also checks the database. For a human or an occasional monitor.
 app.get('/health', wrap(async (_req, res) => {
   await pool.query('SELECT 1');
   res.json({ ok: true, uptime_s: Math.round(process.uptime()) });
@@ -132,7 +136,8 @@ const server = app.listen(config.port, async () => {
       .then((n) => console.log(`  Tavily reports ${n} credits used this billing month`))
       .catch((err) => console.warn(`  could not sync Tavily usage: ${err.message}`));
   await sync();
-  setInterval(sync, 15 * 60_000).unref();
+  // Hourly by default: each sync touches the database, which wakes a paused Neon for ~5 minutes.
+  setInterval(sync, config.budget.syncMinutes * 60_000).unref();
 });
 
 for (const signal of ['SIGINT', 'SIGTERM']) {

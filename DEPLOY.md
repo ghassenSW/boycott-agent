@@ -1,4 +1,7 @@
-# Deploying the API on a server
+# Deploying the API on your own server
+
+> **Looking for the free, no-card option?** Use [DEPLOY-RENDER.md](DEPLOY-RENDER.md) (Render + Neon):
+> no server to manage and no domain needed. This guide is for running it on your own Linux VM.
 
 Works on any Linux server (VM) where Docker runs, including free-tier cloud VMs.
 The result: the API at `https://<your-domain>`, with an automatic HTTPS certificate, and nothing

@@ -17,8 +17,10 @@ COPY schema.sql schema-verifier.sql schema-budget.sql /app/
 USER node
 EXPOSE 3000
 
+# /ping, not /health: a check every 15 s that queried the database would keep a
+# serverless database (Neon) from ever pausing. PORT is set by hosts like Render.
 HEALTHCHECK --interval=15s --timeout=5s --start-period=10s --retries=3 \
-  CMD node -e "fetch('http://127.0.0.1:3000/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"
+  CMD node -e "fetch('http://127.0.0.1:'+(process.env.PORT||3000)+'/ping').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"
 
 # node directly (not npm start) so docker stop's SIGTERM reaches the server and it shuts down cleanly.
 CMD ["node", "src/index.js"]

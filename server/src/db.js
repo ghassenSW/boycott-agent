@@ -3,8 +3,9 @@ import path from 'node:path';
 import pg from 'pg';
 import { config, projectRoot } from './config.js';
 
-export const pool = new pg.Pool(
-  config.db.connectionString
+export const pool = new pg.Pool({
+  // DATABASE_URL (e.g. Neon) wins; its "?sslmode=require" turns on encryption.
+  ...(config.db.connectionString
     ? { connectionString: config.db.connectionString }
     : {
         host: config.db.host,
@@ -12,8 +13,13 @@ export const pool = new pg.Pool(
         user: config.db.user,
         password: config.db.password,
         database: config.db.database,
-      }
-);
+      }),
+  max: 5,
+  // Close idle connections quickly: a serverless database like Neon only pauses (and
+  // stops using free compute hours) when no connection is open.
+  idleTimeoutMillis: 10_000,
+  connectionTimeoutMillis: 15_000, // a paused Neon database takes a moment to wake
+});
 
 export function query(text, params) {
   return pool.query(text, params);
